@@ -73,7 +73,7 @@ npm run dev & npm run dev:web    # bridge with --dev, plus Vite on :5173 with ho
 
 ## Not done yet
 
-- Claude Code still needs `@zed-industries/claude-code-acp` in its image (Phase 3). Until then the console shows the exit-127 hint.
+- Claude Code runs `claude-acp-start`, the wrapper in the `claude-sandbox` image that skips onboarding and then starts the ACP adapter `claude-agent-acp`. Sandboxes from images built before the adapter was added fail with exit 127, and the console shows a rebuild hint.
 - The event log lives in memory: sessions survive closing the tab, not restarting the bridge. Use "Earlier sessions" (`session/load`) to get back to them.
 - "Download as git bundle" bundles the current branch of the session's working directory, compared with `host/main` or `host/master` when the repo came in through `bundle.sh in`. Choose another directory with `/bundle <dir>`.
 - Long-running exec stability (hours, gateway restarts) is untested. When the process dies, the console shows the exit code and stderr, and offers to start a new session.

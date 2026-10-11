@@ -91,9 +91,9 @@ openshell sandbox exec <sandbox> --no-tty --no-login-shell --workdir <dir> \
 - **Gotcha:** OpenCode's TUI command `/models` is not an ACP command. Sent as a prompt, it reaches the model as plain text and nothing useful comes back. Model choice goes through `configOptions` only.
 
 **Claude Code:**
-- It has no native ACP mode. It needs the adapter `@zed-industries/claude-code-acp` installed in the `claude-sandbox` image, started as `claude-code-acp`.
+- It has no native ACP mode. The `claude-sandbox` image has the adapter `@agentclientprotocol/claude-agent-acp` (successor to `@zed-industries/claude-code-acp`), started as `claude-acp-start`, which first skips onboarding.
 - The provider profile's `binaries` list may need updating so the adapter's `claude` process can use the token.
-- None of this is tested yet. Without the adapter, the exec fails with exit code 127 and `claude-code-acp: command not found`.
+- None of this is tested yet. On an older image without the adapter, the exec fails with exit code 127 and `claude-acp-start: not found`.
 
 ## 5. UI
 Three columns. Narrow screens hide the right column. Phone width stacks everything, with the sandbox list as a horizontal strip.
@@ -191,7 +191,7 @@ Keeping ACP's `session/update` payloads as they are means the UI can follow the 
 ```json
 {
   "opencode": {"cmd": ["opencode", "acp"], "modelEnv": "OPENCODE_CONFIG_CONTENT", "defaultModel": "openrouter/nvidia/nemotron-3.5-lightning:free"},
-  "claude":   {"cmd": ["claude-code-acp"]}
+  "claude":   {"cmd": ["claude-acp-start"]}
 }
 ```
 **Knowing which agent a sandbox has.** `openshell sandbox list` doesn't show the image. Options:
@@ -233,4 +233,4 @@ Start with (b), falling back to (c).
 - ACP TypeScript SDK: `@agentclientprotocol/sdk`
 - OpenShell: https://github.com/NVIDIA/OpenShell
 - openshell-configs: https://github.com/fredrikp999/openshell-configs. See `README.md` sections "ACP (Agent Client Protocol)" and "Getting code in and out", `sandbox.sh --acp`, and `acp_client.py`, the reference client for everything in section 4.
-- Claude Code ACP adapter: `@zed-industries/claude-code-acp`
+- Claude Code ACP adapter: `@agentclientprotocol/claude-agent-acp`

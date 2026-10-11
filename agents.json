@@ -9,9 +9,9 @@
   },
   "claude": {
     "label": "Claude Code",
-    "cmd": ["claude-code-acp"],
+    "cmd": ["claude-acp-start"],
     "image": "claude-sandbox:latest",
     "provider": "claude",
-    "missingHint": "Add @zed-industries/claude-code-acp to Dockerfile.claudecode (npm install -g) and rebuild the claude-sandbox image."
+    "missingHint": "This sandbox's image has no claude-acp-start (the claude-agent-acp ACP adapter). Rebuild it in openshell-configs with `make claude-sandbox` (or `make images` for claude-browser and claude-hyperframes too), then recreate the sandbox."
   }
 }

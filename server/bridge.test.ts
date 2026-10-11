@@ -128,6 +128,6 @@ test("a missing agent command reports exit 127 with the adapter hint", async () 
   c.send({ type: "open_session", reqId: "o2", sandbox: "claude-demo", agent: "claude", cwd: "/sandbox" });
   const err = await c.next((m) => m.type === "error" && m.reqId === "o2");
   assert.match(err.message, /exited \(code 127\)/);
-  assert.match(err.hint, /claude-code-acp/);
+  assert.match(err.hint, /make claude-sandbox/);
   c.ws.close();
 });

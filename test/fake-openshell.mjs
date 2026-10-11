@@ -29,8 +29,9 @@ else if (a === "sandbox" && b === "get") {
   console.log(`[${t}] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(3) -> pypi.org:443 [reason:x]`);
 } else if (a === "sandbox" && b === "exec") {
   const cmd = args.slice(args.indexOf("--") + 1);
-  if (cmd[0] === "claude-code-acp") {
-    console.error("sh: 1: claude-code-acp: not found");
+  // Simulates a Claude image built before the ACP adapter was added.
+  if (cmd[0] === "claude-acp-start") {
+    console.error("sh: 1: claude-acp-start: not found");
     process.exit(127);
   }
   if (cmd[0] === "sh") {
