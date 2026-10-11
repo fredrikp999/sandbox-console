@@ -42,7 +42,8 @@ export interface Bundle {
 }
 
 export async function makeBundle(sandbox: string, repo: string): Promise<Bundle> {
-  const remote = `/tmp/console-${Date.now().toString(36)}.bundle`;
+  // `openshell sandbox download` only reads from the workspace (/sandbox), as bundle.sh does.
+  const remote = `/sandbox/.console-${Date.now().toString(36)}.bundle`;
   const r = await execScript(sandbox, SCRIPT, [repo, remote]);
   if (r.code !== 0) {
     const msg = r.stderr.trim() || r.stdout.trim() || `exit code ${r.code}`;

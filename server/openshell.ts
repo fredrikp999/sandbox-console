@@ -61,7 +61,8 @@ export async function runOk(args: string[], timeoutMs?: number): Promise<string>
   const r = await run(args, timeoutMs);
   if (r.code !== 0) {
     const msg = (r.stderr || r.stdout).trim() || `exit code ${r.code}`;
-    throw new CliError(`openshell ${args.slice(0, 2).join(" ")} failed`, msg, "Check `openshell status`.");
+    const gatewayTrouble = /connect|unavailable|gateway|transport|timed out|tls/i.test(msg);
+    throw new CliError(`openshell ${args.slice(0, 2).join(" ")} failed`, msg, gatewayTrouble ? "Check `openshell status`." : undefined);
   }
   return r.stdout;
 }
