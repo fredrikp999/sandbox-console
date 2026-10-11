@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sandbox Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a proposal page framing one large live mockup (three-pane app window), then wiring, architecture, and build plan below. */
+:root {
+  --bg: #eef1f3;          /* page ground: cool grey, nudged toward the teal accent */
+  --surface: #ffffff;
+  --sunken: #f5f7f8;
+  --line: #d9dfe3;
+  --fg: #16202a;
+  --muted: #5b6874;
+  --accent: #0e6f68;      /* containment teal */
+  --accent-soft: #dcefec;
+  --warn: #a8610a;        /* permission / attention */
+  --warn-soft: #fbefd9;
+  --ok: #2c7a3f;
+  --ok-soft: #e1f1e4;
+  --bad: #b3362f;
+  --bad-soft: #f8e1df;
+  --wire: #6b4fd8;        /* ACP wiring overlay */
+  --wire-soft: #ece8fd;
+  --shadow: 0 1px 2px rgba(22,32,42,.06), 0 8px 28px rgba(22,32,42,.08);
+  --display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --body: "Instrument Sans", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1518; --surface: #161e22; --sunken: #121a1d; --line: #26333a;
+  --fg: #e3eaee; --muted: #93a2ab; --accent: #4fc2b6; --accent-soft: #143a37;
+  --warn: #f0a845; --warn-soft: #3a2a12; --ok: #6cc785; --ok-soft: #173123;
+  --bad: #f07a72; --bad-soft: #3d1c1a; --wire: #a996ff; --wire-soft: #2a2350;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1518; --surface: #161e22; --sunken: #121a1d; --line: #26333a;
+  --fg: #e3eaee; --muted: #93a2ab; --accent: #4fc2b6; --accent-soft: #143a37;
+  --warn: #f0a845; --warn-soft: #3a2a12; --ok: #6cc785; --ok-soft: #173123;
+  --bad: #f07a72; --bad-soft: #3d1c1a; --wire: #a996ff; --wire-soft: #2a2350;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35); color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--body); padding: 0 16px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 40px 72px; display: grid; gap: 56px }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.15 }
+h1 { font-size: clamp(30px, 4.4vw, 46px); font-weight: 700; letter-spacing: -.01em }
+h2 { font-size: 26px; font-weight: 700 }
+h3 { font-size: 17px; font-weight: 600; font-family: var(--body) }
+p { margin: 0 }
+code, .mono { font-family: var(--mono); font-size: .88em }
+.eyebrow { font: 600 12px/1 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--accent) }
+.lede { max-width: 66ch; color: var(--muted); font-size: 17px }
+header.top { display: grid; gap: 14px }
+.section { display: grid; gap: 20px }
+.section > p { max-width: 70ch; color: var(--muted) }
+
+/* ---------- mockup window ---------- */
+.stage { display: grid; gap: 12px }
+.stage-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between }
+.stage-bar p { color: var(--muted); font-size: 13.5px }
+.toggle { font: 600 13px var(--body); border: 1px solid var(--wire); color: var(--wire); background: transparent;
+  padding: 7px 12px; border-radius: 999px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center }
+.toggle[aria-pressed="true"] { background: var(--wire); color: var(--surface) }
+.toggle:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+
+.app { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+  display: grid; grid-template-columns: 236px minmax(0,1fr) 268px; height: 680px; overflow: hidden }
+.pane { min-width: 0; display: flex; flex-direction: column; min-height: 0 }
+.side { background: var(--sunken); border-right: 1px solid var(--line) }
+.inspect { background: var(--sunken); border-left: 1px solid var(--line) }
+.pane-head { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 56px }
+.brand { font: 700 15px var(--display); display: flex; align-items: center; gap: 8px }
+.brand-mark { width: 18px; height: 18px; border: 2px solid var(--accent); border-radius: 5px; position: relative }
+.brand-mark::after { content: ""; position: absolute; inset: 4px; background: var(--accent); border-radius: 1px }
+.gw { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--line) }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none }
+.dot.warn { background: var(--warn) } .dot.idle { background: var(--muted) }
+
+.sb-list { list-style: none; margin: 0; padding: 8px; display: grid; gap: 2px; overflow: auto }
+.sb { width: 100%; text-align: left; border: 0; background: transparent; color: var(--fg); font: inherit; padding: 9px 10px;
+  border-radius: 8px; display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; cursor: pointer }
+.sb:hover { background: var(--surface) }
+.sb[aria-current="true"] { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line) }
+.sb .name { font: 500 13.5px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.sb .meta { grid-column: 2 / 4; font-size: 12px; color: var(--muted) }
+.pill { font: 600 10.5px/1 var(--body); letter-spacing: .04em; text-transform: uppercase; padding: 4px 7px; border-radius: 999px; white-space: nowrap }
+.pill.ok { background: var(--ok-soft); color: var(--ok) }
+.pill.warn { background: var(--warn-soft); color: var(--warn) }
+.pill.idle { background: var(--line); color: var(--muted) }
+.side-foot { margin-top: auto; padding: 12px; border-top: 1px solid var(--line) }
+.btn { font: 600 13px var(--body); border-radius: 8px; padding: 8px 12px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer }
+.btn:hover { border-color: var(--muted) }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface) }
+.btn.full { width: 100% }
+.btn.warn { background: var(--warn); border-color: var(--warn); color: var(--surface) }
+
+.chat-head .title { display: grid; gap: 2px; min-width: 0 }
+.chat-head .title b { font: 600 15px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.chat-head .title span { font-size: 12px; color: var(--muted) }
+.model { font: 500 12.5px var(--mono); border: 1px solid var(--line); background: var(--surface); color: var(--fg); border-radius: 8px; padding: 6px 8px; max-width: 220px }
+
+.log { flex: 1; overflow: auto; padding: 20px 22px; display: grid; gap: 14px; align-content: start }
+.msg-user { justify-self: end; max-width: 78%; background: var(--accent-soft); color: var(--fg); padding: 10px 14px; border-radius: 12px 12px 4px 12px }
+.msg-agent { max-width: 88%; display: grid; gap: 8px }
+.msg-agent p { line-height: 1.6 }
+.plan { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; font-size: 13.5px }
+.plan h4 { margin: 0; font: 600 11px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.plan li { list-style: none; display: flex; gap: 8px; align-items: baseline }
+.plan ul { margin: 0; padding: 0; display: grid; gap: 4px }
+.chk { width: 14px; flex: none; font-family: var(--mono); color: var(--muted) }
+.done .chk { color: var(--ok) } .done span:last-child { color: var(--muted); text-decoration: line-through }
+.now .chk { color: var(--accent) }
+
+.tool { border: 1px solid var(--line); border-left: 3px solid var(--ok); border-radius: 8px; background: var(--sunken); font-size: 13px }
+.tool.run { border-left-color: var(--accent) } .tool.fail { border-left-color: var(--bad) }
+.tool summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 10px; align-items: center; list-style: none }
+.tool summary::-webkit-details-marker { display: none }
+.tool .kind { font: 500 11px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; width: 42px; flex: none }
+.tool .t { font-family: var(--mono); font-size: 12.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tool .st { font-size: 12px; color: var(--muted); white-space: nowrap }
+.tool pre { margin: 0; padding: 10px 12px; border-top: 1px solid var(--line); font: 12px/1.5 var(--mono); overflow-x: auto; color: var(--fg) }
+.add { color: var(--ok) } .del { color: var(--bad) }
+
+.perm { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 12px 14px; display: grid; gap: 10px }
+.perm .q { font-weight: 600 } .perm code { background: var(--surface); padding: 2px 6px; border-radius: 5px }
+.perm .acts { display: flex; flex-wrap: wrap; gap: 8px }
+.perm.resolved { border-color: var(--line); background: var(--sunken); color: var(--muted) }
+
+.composer { border-top: 1px solid var(--line); padding: 12px 16px 14px; display: grid; gap: 8px; position: relative }
+.comp-row { display: flex; gap: 8px; align-items: flex-end }
+.comp-row textarea { flex: 1; min-width: 0; resize: none; font: 14px/1.5 var(--body); color: var(--fg); background: var(--sunken); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; height: 46px }
+.hint { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 14px }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--surface) }
+.slash { position: absolute; left: 16px; right: 16px; bottom: calc(100% - 4px); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 6px; display: grid; gap: 2px }
+.slash button { text-align: left; border: 0; background: transparent; color: var(--fg); font: inherit; padding: 7px 10px; border-radius: 6px; display: grid; grid-template-columns: 150px 1fr; gap: 10px; cursor: pointer }
+.slash button:hover, .slash button:focus-visible { background: var(--sunken) }
+.slash b { font: 500 13px var(--mono) } .slash span { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.slash .grp { font: 600 10.5px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 6px 10px 2px }
+
+.inspect .blk { padding: 14px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; font-size: 13px }
+.inspect h5 { margin: 0; font: 600 11px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px }
+.kv dt { color: var(--muted) } .kv dd { margin: 0; font-family: var(--mono); font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.files li { list-style: none; display: flex; justify-content: space-between; gap: 8px; font-family: var(--mono); font-size: 12px }
+.files ul, .egress ul { margin: 0; padding: 0; display: grid; gap: 5px }
+.egress li { list-style: none; display: flex; justify-content: space-between; gap: 8px; font-family: var(--mono); font-size: 12px }
+.egress .no { color: var(--bad) } .egress .yes { color: var(--ok) }
+.inspect .scroll { overflow: auto }
+
+.empty { margin: auto; text-align: center; display: grid; gap: 10px; justify-items: center; color: var(--muted); max-width: 34ch; padding: 24px }
+.empty b { color: var(--fg); font-family: var(--display); font-size: 18px }
+
+/* ACP wiring overlay */
+[data-acp] { position: relative }
+.app.wired [data-acp] { outline: 1.5px dashed var(--wire); outline-offset: -2px }
+.app.wired [data-acp]::after { content: attr(data-acp); position: absolute; top: 4px; right: 4px; z-index: 5; font: 500 10.5px/1.3 var(--mono);
+  background: var(--wire); color: var(--surface); padding: 2px 6px; border-radius: 4px; pointer-events: none; max-width: 92%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+
+/* ---------- below the fold ---------- */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface) }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 14px }
+th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top }
+th { font: 600 11.5px var(--body); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); background: var(--sunken) }
+tr:last-child td { border-bottom: 0 }
+td code { color: var(--wire) }
+
+.arch { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 22px; overflow-x: auto }
+.arch-row { display: grid; grid-template-columns: 1fr auto 1.2fr auto 1fr auto 1.2fr; align-items: center; gap: 10px; min-width: 820px }
+.node { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 4px; background: var(--sunken) }
+.node b { font-family: var(--display); font-size: 15px } .node span { font-size: 12.5px; color: var(--muted) }
+.node.box { border: 2px solid var(--accent); background: var(--accent-soft) }
+.arrow { display: grid; justify-items: center; gap: 2px; font: 11px var(--mono); color: var(--muted); text-align: center }
+.arrow i { display: block; width: 46px; height: 2px; background: var(--muted); position: relative }
+.arrow i::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left-color: var(--muted); border-right: 0 }
+.boundary { font: 600 11px var(--body); letter-spacing: .07em; text-transform: uppercase; color: var(--accent); margin-top: 14px; min-width: 820px; display: grid; grid-template-columns: 4.6fr 1.2fr; gap: 10px }
+.boundary span { border-top: 2px solid var(--line); padding-top: 6px } .boundary span:last-child { border-top-color: var(--accent) }
+
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: grid; gap: 10px; align-content: start }
+.card ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; color: var(--fg) }
+.card p { color: var(--muted) }
+.rec { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; max-width: 72ch }
+.phases { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px }
+.phase .n { font: 600 12px var(--mono); color: var(--accent) }
+footer { color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); padding-top: 18px }
+
+@media (max-width: 1020px) {
+  .app { grid-template-columns: 210px minmax(0,1fr) }
+  .inspect { display: none }
+}
+@media (max-width: 700px) {
+  .app { grid-template-columns: minmax(0,1fr); height: auto }
+  .side { border-right: 0; border-bottom: 1px solid var(--line) }
+  .sb-list { grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); overflow-x: auto }
+  .side-foot, .gw { display: none }
+  .log { max-height: 520px }
+  .msg-user, .msg-agent { max-width: 100% }
+  .grid2, .phases { grid-template-columns: minmax(0,1fr) }
+  .slash button { grid-template-columns: 1fr }
+  .model { max-width: 150px }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .msg-user, .msg-agent, .perm { animation: rise .25s ease-out both }
+  @keyframes rise { from { transform: translateY(4px) } to { transform: none } }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <span class="eyebrow">Proposal · ACP client for OpenShell sandboxes</span>
+    <h1>Sandbox Console</h1>
+    <p class="lede">A local web app that lists your OpenShell sandboxes and lets you work with the agent in each one over ACP. The agent stays inside its sandbox. The console only shows what it does and asks you before it acts.</p>
+  </header>
+
+  <section class="stage" aria-label="Interactive mockup">
+    <div class="stage-bar">
+      <p>Interactive mockup with example content. Click a sandbox, type <kbd>/</kbd> in the message box, answer the permission request.</p>
+      <button class="toggle" id="wire" aria-pressed="false">Show ACP wiring</button>
+    </div>
+
+    <div class="app" id="app">
+      <!-- sandboxes -->
+      <aside class="pane side">
+        <div class="pane-head"><span class="brand"><span class="brand-mark"></span>Sandbox Console</span></div>
+        <div class="gw" data-acp="openshell status"><span class="dot"></span>Gateway <span class="mono">openshell</span> · connected</div>
+        <ul class="sb-list" id="sbList" data-acp="openshell sandbox list"></ul>
+        <div class="side-foot"><button class="btn full" id="newSb">New sandbox</button></div>
+      </aside>
+
+      <!-- conversation -->
+      <main class="pane" id="chatPane">
+        <div class="pane-head chat-head">
+          <div class="title"><b id="chatName">opencode-agent1</b><span id="chatSub">OpenCode 1.18.35 · /sandbox</span></div>
+          <select class="model" id="model" aria-label="Model" data-acp="configOptions › model">
+            <option>openrouter/nvidia/nemotron-3.5-lightning:free</option>
+            <option>openrouter/nvidia/nemotron-3-super-120b-a12b:free</option>
+            <option>openrouter/anthropic/claude-fable-5.1</option>
+            <option>openrouter/openrouter/auto</option>
+          </select>
+        </div>
+        <div class="log" id="log" data-acp="session/update"></div>
+        <div class="composer" id="composer">
+          <div class="slash" id="slash" hidden data-acp="available_commands_update"></div>
+          <div class="comp-row">
+            <textarea id="input" rows="1" placeholder="Ask the agent… ( / for commands )" aria-label="Message"></textarea>
+            <button class="btn primary" id="send" data-acp="session/prompt">Send</button>
+          </div>
+          <div class="hint"><span><kbd>Enter</kbd> send</span><span><kbd>Esc</kbd> stop the agent</span><span><kbd>/</kbd> commands</span></div>
+        </div>
+      </main>
+
+      <!-- inspector -->
+      <aside class="pane inspect">
+        <div class="pane-head"><h3>Session</h3><span class="pill ok" id="sessState">Working</span></div>
+        <div class="scroll">
+          <div class="blk">
+            <h5>Details</h5>
+            <dl class="kv">
+              <dt>Agent</dt><dd>opencode acp</dd>
+              <dt>Directory</dt><dd>/sandbox/myrepo</dd>
+              <dt>Session</dt><dd>ses_ed67…LgdnqFx</dd>
+              <dt>Tokens</dt><dd>14.2k</dd>
+            </dl>
+          </div>
+          <div class="blk files" data-acp="tool_call › locations / diff">
+            <h5>Files changed</h5>
+            <ul>
+              <li><span>server.py</span><span><span class="add">+18</span> <span class="del">−2</span></span></li>
+              <li><span>tests/test_health.py</span><span class="add">+24</span></li>
+            </ul>
+            <button class="btn" style="justify-self:start">Download as git bundle</button>
+          </div>
+          <div class="blk egress" data-acp="openshell logs">
+            <h5>Network this session</h5>
+            <ul>
+              <li><span>openrouter.ai</span><span class="yes">allowed · 6</span></li>
+              <li><span>pypi.org</span><span class="no">denied · 1</span></li>
+              <li><span>models.opencode.ai</span><span class="no">denied · 2</span></li>
+            </ul>
+          </div>
+          <div class="blk">
+            <h5>Approvals</h5>
+            <p style="color:var(--muted)">Ask before running commands. Edits inside <span class="mono">/sandbox</span> are allowed.</p>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="section">
+    <span class="eyebrow">How the screen maps to ACP</span>
+    <h2>Every element is one protocol message</h2>
+    <p>The console needs nothing from the agent beyond what ACP already sends. The OpenCode agent in your sandbox already reports models, commands, plans, tool calls and permission requests; <code>acp_client.py</code> prints the same messages as text.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>On screen</th><th>ACP message</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Sandbox list and status pills</td><td><code>openshell sandbox list</code></td><td>Not ACP. Polled by the bridge every few seconds. Ready, starting and stopped get their own pill.</td></tr>
+        <tr><td>Opening a sandbox</td><td><code>initialize</code> → <code>session/new</code></td><td>The bridge spawns <code>openshell sandbox exec … opencode acp</code>. Past sessions can be reopened with <code>session/load</code> (OpenCode supports it).</td></tr>
+        <tr><td>Model picker</td><td><code>configOptions</code> · <code>session/set_config_option</code></td><td>The list arrives with <code>session/new</code>; about 400 models on OpenRouter, so the picker needs search.</td></tr>
+        <tr><td>Slash menu</td><td><code>available_commands_update</code></td><td>Agent commands (<code>/init</code>, <code>/review</code>) plus a few console commands.</td></tr>
+        <tr><td>Streaming reply</td><td><code>agent_message_chunk</code></td><td>Rendered as Markdown. Thoughts (<code>agent_thought_chunk</code>) fold into a “Thinking” line.</td></tr>
+        <tr><td>Plan checklist</td><td><code>plan</code></td><td>Replaced in full on every update.</td></tr>
+        <tr><td>Tool cards</td><td><code>tool_call</code> · <code>tool_call_update</code></td><td>Kind, title, status, and diff or output in the expanded view. Paths feed “Files changed”.</td></tr>
+        <tr><td>Permission card</td><td><code>session/request_permission</code></td><td>Buttons are the agent's own options (allow once, always, reject).</td></tr>
+        <tr><td>Stop button and <kbd>Esc</kbd></td><td><code>session/cancel</code></td><td>The prompt then ends with <code>stopReason: cancelled</code>.</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="section">
+    <span class="eyebrow">Architecture</span>
+    <h2>A small bridge on your machine</h2>
+    <p>A browser can't start processes, so a local bridge does it. It runs one <code>sandbox exec</code> per open session and relays ACP between that process and the browser over a WebSocket. No port is opened in the sandbox.</p>
+    <div class="arch">
+      <div class="arch-row">
+        <div class="node"><b>Browser UI</b><span>React, on 127.0.0.1</span></div>
+        <div class="arrow"><i></i>WebSocket<br>ACP JSON</div>
+        <div class="node"><b>Bridge</b><span>Node + <span class="mono">@agentclientprotocol/sdk</span>. Session manager, token auth</span></div>
+        <div class="arrow"><i></i>stdio<br>per session</div>
+        <div class="node"><b>OpenShell gateway</b><span><span class="mono">sandbox exec --no-tty</span></span></div>
+        <div class="arrow"><i></i>gRPC</div>
+        <div class="node box"><b>Sandbox</b><span><span class="mono">opencode acp</span>, policy, provider credential</span></div>
+      </div>
+      <div class="boundary"><span>Your machine</span><span>Sandbox boundary</span></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h3>Security rules the console keeps</h3>
+        <ul>
+          <li>Advertise no <code>fs</code> or <code>terminal</code> capability. The agent works only inside the sandbox.</li>
+          <li>Bind to 127.0.0.1, with a random token in the URL, so other local users and web pages can't drive your agents.</li>
+          <li>No credentials in the console. Providers stay in the gateway, as now.</li>
+          <li>Code leaves through git bundles you review, as in the README.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Why the bridge is needed</h3>
+        <ul>
+          <li>Keeps sessions alive when you close the tab, and replays them when you come back.</li>
+          <li>Several sandboxes at once, one agent process each.</li>
+          <li>Adds the parts ACP doesn't cover: sandbox list, create, delete, and network events from <code>openshell logs</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <span class="eyebrow">Recommendation</span>
+    <h2>Build it as a local web app first</h2>
+    <p class="rec">I recommend a Node bridge with a React front end, started with one command such as <code>./console.sh</code>. It reuses what <code>acp_client.py</code> already proved works. A desktop wrapper (Tauri) can come later without changing the bridge or the UI.</p>
+    <div class="phases">
+      <div class="card phase"><span class="n">Phase 1</span><h3>Chat with one sandbox</h3><p>Sandbox list, open a session, streaming replies, tool cards, permission cards, stop. About the scope of <code>acp_client.py</code>.</p></div>
+      <div class="card phase"><span class="n">Phase 2</span><h3>Work across sandboxes</h3><p>Several live sessions, model picker, slash menu, session history with <code>session/load</code>, create and delete sandboxes from the UI.</p></div>
+      <div class="card phase"><span class="n">Phase 3</span><h3>Review and ship</h3><p>Files changed with diffs, git bundle download, a network view built from <code>openshell logs</code> (still to check that the logs carry policy denials), Claude Code once its ACP adapter is in the image.</p></div>
+    </div>
+  </section>
+
+  <footer>Mockup content is example data. Sandbox names come from your current <code>openshell sandbox list</code>; the conversation, files and network counts are illustrative.</footer>
+</div>
+
+<script>
+(() => {
+  const sandboxes = [
+    { name: "opencode-agent1", agent: "OpenCode", state: "ok", label: "Working", meta: "OpenCode · 3 min ago" },
+    { name: "acpguy", agent: "OpenCode", state: "warn", label: "Waiting", meta: "Needs approval" },
+    { name: "my-agent", agent: "Claude Code", state: "idle", label: "Ready", meta: "No open session" },
+  ];
+  const commands = [
+    ["Agent", "/init", "guided AGENTS.md setup"],
+    ["Agent", "/review", "review changes [commit|branch|pr]"],
+    ["Agent", "/customize-opencode", "edit opencode's own configuration"],
+    ["Console", "/model", "switch model for this session"],
+    ["Console", "/bundle", "download the agent's commits as a git bundle"],
+    ["Console", "/clear", "start a new session in this sandbox"],
+  ];
+
+  const $ = id => document.getElementById(id);
+  const list = $("sbList"), log = $("log");
+  let current = "opencode-agent1";
+
+  function renderList() {
+    list.innerHTML = "";
+    sandboxes.forEach(s => {
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.className = "sb"; b.setAttribute("aria-current", s.name === current);
+      b.innerHTML = `<span class="dot ${s.state === "ok" ? "" : s.state}"></span><span class="name"></span><span class="pill ${s.state}">${s.label}</span><span class="meta">${s.meta}</span>`;
+      b.querySelector(".name").textContent = s.name;
+      b.onclick = () => { current = s.name; renderList(); renderChat(); };
+      li.appendChild(b); list.appendChild(li);
+    });
+  }
+
+  const conversation = `
+    <div class="msg-user">Add a /health endpoint to server.py that returns the git commit and uptime, with a test.</div>
+    <div class="msg-agent">
+      <div class="plan" data-acp="plan"><h4>Plan</h4><ul>
+        <li class="done"><span class="chk">✓</span><span>Read server.py and the test layout</span></li>
+        <li class="done"><span class="chk">✓</span><span>Add the /health route</span></li>
+        <li class="now"><span class="chk">●</span><span>Write tests/test_health.py and run it</span></li>
+      </ul></div>
+      <details class="tool"><summary><span class="kind">read</span><span class="t">server.py</span><span class="st">done · 0.1s</span></summary><pre>142 lines</pre></details>
+      <details class="tool" open data-acp="tool_call_update"><summary><span class="kind">edit</span><span class="t">server.py</span><span class="st">done</span></summary><pre><span class="add">+@app.get("/health")</span>
+<span class="add">+def health():</span>
+<span class="add">+    return {"commit": GIT_SHA, "uptime_s": int(time.monotonic() - STARTED)}</span></pre></details>
+      <details class="tool"><summary><span class="kind">edit</span><span class="t">tests/test_health.py</span><span class="st">done</span></summary><pre><span class="add">+def test_health_reports_commit(client): …</span></pre></details>
+      <p>The route is in place. I'd like to run the test suite to check it.</p>
+    </div>
+    <div class="perm" id="perm" data-acp="session/request_permission">
+      <div class="q">The agent wants to run a command</div>
+      <div><code>pytest -q tests/test_health.py</code></div>
+      <div class="acts">
+        <button class="btn warn" data-opt="Allowed once">Allow once</button>
+        <button class="btn" data-opt="Always allowed for pytest">Always allow pytest</button>
+        <button class="btn" data-opt="Rejected">Reject</button>
+      </div>
+    </div>`;
+
+  function renderChat() {
+    const s = sandboxes.find(x => x.name === current);
+    $("chatName").textContent = s.name;
+    if (s.name === "opencode-agent1" || s.name === "acpguy") {
+      $("chatSub").textContent = `${s.agent} 1.18.35 · /sandbox/myrepo`;
+      log.innerHTML = conversation;
+      wirePerm();
+    } else {
+      $("chatSub").textContent = `${s.agent} · not connected`;
+      log.innerHTML = `<div class="empty"><b>No session open</b><span>Start the agent in this sandbox. The console runs <span class="mono">claude-code-acp</span> through the gateway.</span><button class="btn primary" id="startSess">Start session</button></div>`;
+      $("startSess").onclick = () => {
+        log.innerHTML = `<div class="empty"><b>Claude Code needs its ACP adapter</b><span>Add <span class="mono">@zed-industries/claude-code-acp</span> to Dockerfile.claudecode and rebuild the image.</span></div>`;
+      };
+    }
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function wirePerm() {
+    const p = $("perm"); if (!p) return;
+    p.querySelectorAll("button").forEach(b => b.onclick = () => {
+      p.classList.add("resolved");
+      p.innerHTML = `<div><b>${b.dataset.opt}</b> · <code>pytest -q tests/test_health.py</code></div>`;
+      if (b.dataset.opt !== "Rejected") {
+        const d = document.createElement("details");
+        d.className = "tool"; d.open = true;
+        d.innerHTML = `<summary><span class="kind">exec</span><span class="t">pytest -q tests/test_health.py</span><span class="st">done · 1.4s</span></summary><pre>..                                     [100%]\n2 passed in 0.31s</pre>`;
+        log.appendChild(d);
+        const m = document.createElement("div"); m.className = "msg-agent";
+        m.innerHTML = "<p>Both tests pass. The endpoint returns the commit from <code>GIT_SHA</code> and the uptime in seconds.</p>";
+        log.appendChild(m);
+        $("sessState").textContent = "Idle"; $("sessState").className = "pill idle";
+      }
+      log.scrollTop = log.scrollHeight;
+    });
+  }
+
+  // slash menu
+  const input = $("input"), slash = $("slash");
+  function showSlash(q) {
+    const hits = commands.filter(c => c[1].startsWith(q));
+    if (!hits.length) { slash.hidden = true; return; }
+    let html = "", grp = "";
+    hits.forEach(c => {
+      if (c[0] !== grp) { grp = c[0]; html += `<div class="grp">${grp}</div>`; }
+      html += `<button type="button" data-cmd="${c[1]}"><b>${c[1]}</b><span>${c[2]}</span></button>`;
+    });
+    slash.innerHTML = html; slash.hidden = false;
+    slash.querySelectorAll("button").forEach(b => b.onclick = () => { input.value = b.dataset.cmd + " "; slash.hidden = true; input.focus(); });
+  }
+  input.addEventListener("input", () => {
+    const v = input.value;
+    if (v.startsWith("/") && !v.includes(" ")) showSlash(v); else slash.hidden = true;
+  });
+  input.addEventListener("keydown", e => {
+    if (e.key === "Escape") slash.hidden = true;
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  $("send").onclick = send;
+  function send() {
+    const v = input.value.trim(); if (!v) return;
+    const u = document.createElement("div"); u.className = "msg-user"; u.textContent = v;
+    const n = document.createElement("div"); n.className = "msg-agent";
+    n.innerHTML = `<p style="color:var(--muted)">Mockup: the console would send this as <code>session/prompt</code> and stream the reply here.</p>`;
+    log.append(u, n); input.value = ""; slash.hidden = true; log.scrollTop = log.scrollHeight;
+  }
+
+  $("model").onchange = e => {
+    const n = document.createElement("div"); n.className = "msg-agent";
+    n.innerHTML = `<p style="color:var(--muted)">Model set to <code></code></p>`;
+    n.querySelector("code").textContent = e.target.value;
+    log.appendChild(n); log.scrollTop = log.scrollHeight;
+  };
+  $("newSb").onclick = () => {
+    const n = document.createElement("div"); n.className = "msg-agent";
+    n.innerHTML = `<p style="color:var(--muted)">Would open a form: name, agent (OpenCode or Claude Code), working directory. Runs <code>./sandbox.sh</code> under the hood.</p>`;
+    log.appendChild(n); log.scrollTop = log.scrollHeight;
+  };
+
+  const wire = $("wire");
+  wire.onclick = () => {
+    const on = wire.getAttribute("aria-pressed") !== "true";
+    wire.setAttribute("aria-pressed", on);
+    $("app").classList.toggle("wired", on);
+  };
+
+  renderList(); renderChat();
+})();
+</script>

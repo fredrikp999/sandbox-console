@@ -1,0 +1,17 @@
+{
+  "opencode": {
+    "label": "OpenCode",
+    "cmd": ["opencode", "acp"],
+    "modelEnv": "OPENCODE_CONFIG_CONTENT",
+    "defaultModel": "openrouter/nvidia/nemotron-3.5-lightning:free",
+    "image": "opencode-sandbox:latest",
+    "provider": "openrouter"
+  },
+  "claude": {
+    "label": "Claude Code",
+    "cmd": ["claude-code-acp"],
+    "image": "claude-sandbox:latest",
+    "provider": "claude",
+    "missingHint": "Add @zed-industries/claude-code-acp to Dockerfile.claudecode (npm install -g) and rebuild the claude-sandbox image."
+  }
+}
