@@ -86,17 +86,40 @@ const ToolCard = memo(function ToolCard({ t }: { t: ToolItem }) {
   );
 });
 
-function optionClass(o: PermissionOption, i: number) {
-  if (o.kind === "allow_once" || (i === 0 && o.kind?.startsWith("allow"))) return "btn warn";
-  return "btn";
+// What each option does, from its ACP `kind`. The `name` is free text chosen by
+// the agent, so it is never the only thing shown or used for styling.
+const KIND_TAG: Record<string, string> = {
+  allow_once: "allows once",
+  allow_always: "allows always",
+  reject_once: "rejects",
+  reject_always: "rejects always",
+};
+const KIND_DONE: Record<string, string> = {
+  allow_once: "Allowed once",
+  allow_always: "Always allowed",
+  reject_once: "Rejected",
+  reject_always: "Always rejected",
+};
+
+function optionClass(o: PermissionOption) {
+  if (o.kind === "allow_once") return "btn warn";
+  if (o.kind === "reject_once" || o.kind === "reject_always") return "btn";
+  return "btn outline-warn";
+}
+
+function sameMeaning(name: string, kind: string) {
+  return name.trim().toLowerCase() === (KIND_DONE[kind] ?? "").toLowerCase();
 }
 
 const PermissionCard = memo(function PermissionCard({ p, conv, sessionId }: { p: PermissionItem; conv: Conversation; sessionId: string }) {
   const { question, text } = permissionSubject(p, conv);
   if (p.resolved) {
+    const chosen = p.options.find((o) => o.optionId === p.resolved!.optionId);
+    const done = chosen ? (KIND_DONE[chosen.kind] ?? chosen.name) : "Cancelled";
     return (
       <div className="perm resolved">
-        <b>{p.resolved.label}</b> · <code>{text}</code>
+        <b>{done}</b>
+        {chosen && !sameMeaning(chosen.name, chosen.kind) && <span> ({chosen.name})</span>} · <code>{text}</code>
       </div>
     );
   }
@@ -114,12 +137,14 @@ const PermissionCard = memo(function PermissionCard({ p, conv, sessionId }: { p:
         <code>{text}</code>
       </div>
       <div className="acts">
-        {p.options.map((o, i) => (
-          <button key={o.optionId} className={optionClass(o, i)} onClick={() => answer(o.optionId)}>
+        {p.options.map((o) => (
+          <button key={o.optionId} className={optionClass(o)} onClick={() => answer(o.optionId)} title={`The agent's option "${o.name}" (${o.kind})`}>
             {o.name}
+            <span className="kind-tag">{KIND_TAG[o.kind] ?? `unknown: ${o.kind}`}</span>
           </button>
         ))}
       </div>
+      <div className="perm-note">Described by the agent. The console can't check what it will actually do.</div>
     </div>
   );
 });

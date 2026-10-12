@@ -10,7 +10,7 @@ import { CliError, download, execScript } from "./openshell.ts";
 const SCRIPT = `
 set -e
 repo=$1 out=$2
-cd "$repo" 2>/dev/null || { echo "$repo does not exist in the sandbox." >&2; exit 2; }
+cd -- "$repo" 2>/dev/null || { echo "$repo does not exist in the sandbox." >&2; exit 2; }
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "$repo is not a git repository." >&2; exit 2; }
 branch=$(git branch --show-current)
 [ -n "$branch" ] || { echo "$repo is on a detached HEAD; check out a branch first." >&2; exit 2; }

@@ -19,7 +19,7 @@ export function App() {
         <b>The console needs its access link</b>
         <span>
           The bridge was restarted, or this browser hasn't been given its token. Open the URL that <span className="mono">./console.sh</span> printed
-          (it ends with <span className="mono">?token=…</span>).
+          (it ends with <span className="mono">#token=…</span>).
         </span>
       </div>
     );

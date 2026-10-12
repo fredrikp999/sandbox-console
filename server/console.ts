@@ -1,14 +1,18 @@
 // The bridge's core: polls OpenShell for sandboxes, owns the agent sessions and
 // handles messages from the browser tabs.
 import type { WebSocket } from "ws";
-import type { AgentId, ClientMessage, GatewayStatus, SandboxRow, ServerMessage } from "../shared/protocol.ts";
+import type { AgentId, ClientMessage, GatewayStatus, NetworkHost, SandboxRow, ServerMessage } from "../shared/protocol.ts";
 import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
 import * as os from "./openshell.ts";
 import { Session, type SessionHost } from "./session.ts";
+import { NEW_SANDBOX_NAME, parseClientMessage, SANDBOX_NAME } from "./validate.ts";
 
 const LIST_EVERY = 3_000;
 const STATUS_EVERY = 10_000;
-const NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+/** How long a detection by name (or a failed one) is trusted before asking `sandbox get` again. */
+const DETECT_TTL = 60_000;
+/** Network results are shared by all tabs for this long. */
+const NETWORK_TTL = 10_000;
 
 interface Tab {
   ws: WebSocket;
@@ -23,7 +27,9 @@ export class Console implements SessionHost {
   private sessions = new Map<string, Session>(); // by sandbox name
   private raw: os.RawSandbox[] = [];
   private listError: string | undefined;
-  private detected = new Map<string, { agent: AgentId | null; source: SandboxRow["agentSource"] }>(); // by sandbox id
+  private detected = new Map<string, { agent: AgentId | null; source: SandboxRow["agentSource"]; at: number }>(); // by sandbox id
+  private listing: Promise<void> | null = null;
+  private network = new Map<string, { at: number; since: number; result: Promise<NetworkHost[]> }>(); // by sandbox
   private gateway: GatewayStatus = { name: "openshell", status: "unknown" };
   private timers: NodeJS.Timeout[] = [];
 
@@ -49,9 +55,9 @@ export class Console implements SessionHost {
     ws.on("message", (data) => {
       let msg: ClientMessage;
       try {
-        msg = JSON.parse(String(data));
-      } catch {
-        return this.send(tab, { type: "error", message: "Bad message from the browser" });
+        msg = parseClientMessage(String(data));
+      } catch (e) {
+        return this.send(tab, { type: "error", reqId: (e as any).reqId, message: (e as Error).message });
       }
       this.handle(tab, msg).catch((e) =>
         this.send(tab, {
@@ -102,6 +108,17 @@ export class Console implements SessionHost {
   private bySessionId(id: string): Session {
     for (const s of this.sessions.values()) if (s.sessionId === id) return s;
     throw Object.assign(new Error("That session is no longer open."), { hint: "Start a new session from the sandbox list." });
+  }
+
+  /** A sandbox that exists right now. Names from the browser go nowhere else. */
+  private sandbox(name: string): os.RawSandbox {
+    const sb = SANDBOX_NAME.test(name) ? this.raw.find((s) => s.name === name) : undefined;
+    if (!sb) {
+      throw Object.assign(new Error(`There is no sandbox named ${JSON.stringify(name)}.`), {
+        hint: this.listError ? "The sandbox list couldn't be read. Check `openshell status`." : undefined,
+      });
+    }
+    return sb;
   }
 
   private agent(id: AgentId): AgentConfig {
@@ -176,7 +193,7 @@ export class Console implements SessionHost {
       case "network": {
         const s = this.bySessionId(msg.sessionId);
         try {
-          const hosts = await os.networkSince(s.sandbox, s.spawnedAt);
+          const hosts = await this.networkFor(s);
           this.send(tab, { type: "network", reqId: msg.reqId, sessionId: msg.sessionId, hosts });
         } catch (e) {
           this.send(tab, { type: "network", reqId: msg.reqId, sessionId: msg.sessionId, hosts: [], error: (e as Error).message });
@@ -185,6 +202,7 @@ export class Console implements SessionHost {
       }
 
       case "set_sandbox_agent":
+        this.sandbox(msg.name);
         this.agent(msg.agent);
         this.state.set(msg.name, { agent: msg.agent });
         this.changed();
@@ -194,6 +212,7 @@ export class Console implements SessionHost {
         return this.create(tab, msg);
 
       case "delete_sandbox": {
+        this.sandbox(msg.name);
         this.sessions.get(msg.name)?.close();
         this.sessions.delete(msg.name);
         await os.deleteSandbox(msg.name);
@@ -222,8 +241,8 @@ export class Console implements SessionHost {
       return;
     }
 
-    const sb = this.raw.find((s) => s.name === msg.sandbox);
-    if (sb && sb.phase !== "Ready") {
+    const sb = this.sandbox(msg.sandbox);
+    if (sb.phase !== "Ready") {
       throw Object.assign(new Error(`Sandbox ${msg.sandbox} is ${sb.phase}, not Ready.`), {
         hint: "Wait for it, or delete it and create it again.",
       });
@@ -248,7 +267,7 @@ export class Console implements SessionHost {
 
   private async create(tab: Tab, msg: Extract<ClientMessage, { type: "create_sandbox" }>) {
     const name = msg.name.trim();
-    if (!NAME_RE.test(name)) {
+    if (!NEW_SANDBOX_NAME.test(name)) {
       throw new Error("Use lowercase letters, digits and dashes for the name (max 63 characters).");
     }
     if (this.raw.some((s) => s.name === name)) throw new Error(`A sandbox named ${name} already exists.`);
@@ -268,7 +287,13 @@ export class Console implements SessionHost {
 
   // ---- OpenShell polling
 
-  private async refreshList() {
+  /** One `sandbox list` at a time: callers share the run in flight. */
+  private refreshList(): Promise<void> {
+    this.listing ??= this.doRefreshList().finally(() => (this.listing = null));
+    return this.listing;
+  }
+
+  private async doRefreshList() {
     try {
       this.raw = await os.listSandboxes();
       this.listError = undefined;
@@ -302,14 +327,16 @@ export class Console implements SessionHost {
    * name (`opencode-*`, `claude-*`, as sandbox.sh names them), then what the user told us.
    */
   private async detect(s: os.RawSandbox) {
-    if (this.detected.has(s.id) && this.detected.get(s.id)!.source === "policy") return;
+    const known = this.detected.get(s.id);
+    if (known && (known.source === "policy" || Date.now() - known.at < DETECT_TTL)) return;
+    const at = Date.now();
     if (s.phase === "Ready") {
       try {
         const full = await os.getSandbox(s.name);
         const keys = Object.keys(full.policy?.network_policies ?? {});
         for (const a of this.agents.values()) {
           if (a.provider && keys.includes(`_provider_${a.provider}`)) {
-            this.detected.set(s.id, { agent: a.id, source: "policy" });
+            this.detected.set(s.id, { agent: a.id, source: "policy", at });
             return;
           }
         }
@@ -319,11 +346,11 @@ export class Console implements SessionHost {
     }
     for (const a of this.agents.values()) {
       if (s.name === a.id || s.name.startsWith(`${a.id}-`)) {
-        this.detected.set(s.id, { agent: a.id, source: "name" });
+        this.detected.set(s.id, { agent: a.id, source: "name", at });
         return;
       }
     }
-    this.detected.set(s.id, { agent: null, source: null });
+    this.detected.set(s.id, { agent: null, source: null, at });
   }
 
   private rows(): SandboxRow[] {
@@ -354,6 +381,16 @@ export class Console implements SessionHost {
         },
       };
     });
+  }
+
+  /** `openshell logs` for a session, shared between tabs for a few seconds. */
+  private networkFor(s: Session): Promise<NetworkHost[]> {
+    const hit = this.network.get(s.sandbox);
+    if (hit && hit.since === s.spawnedAt && Date.now() - hit.at < NETWORK_TTL) return hit.result;
+    const result = os.networkSince(s.sandbox, s.spawnedAt);
+    this.network.set(s.sandbox, { at: Date.now(), since: s.spawnedAt, result });
+    result.catch(() => this.network.delete(s.sandbox));
+    return result;
   }
 
   /** For the bundle download: the sandbox and directory of an open session. */

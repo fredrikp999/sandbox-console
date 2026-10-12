@@ -35,10 +35,29 @@ else if (a === "sandbox" && b === "get") {
     process.exit(127);
   }
   if (cmd[0] === "sh") {
-    console.error("fake: no git here");
-    process.exit(2);
+    // bundle.ts: `sh -c <script> sh <repo> <out>`. /sandbox/repo is a repo with two
+    // commits on a branch whose name isn't Latin-1; anything else isn't a repo.
+    const [script, , repo] = cmd.slice(2);
+    if (script.includes("git bundle create") && repo === "/sandbox/repo") {
+      console.log("agent/ünï 2 host/main");
+      process.exit(0);
+    }
+    if (script.includes("git bundle create")) {
+      console.error(`${repo} is not a git repository.`);
+      process.exit(2);
+    }
+    process.exit(0); // rm -f of the remote bundle
   }
   agent();
+} else if (a === "sandbox" && b === "download") {
+  const [remote, localDir] = args.slice(3);
+  if (!remote.startsWith("/sandbox/")) {
+    console.error(`Error: sandbox source path '${remote}' is outside the sandbox workspace (/sandbox)`);
+    process.exit(1);
+  }
+  const { writeFileSync } = await import("node:fs");
+  const { basename, join } = await import("node:path");
+  writeFileSync(join(localDir, basename(remote)), "# v2 git bundle (fake)\n");
 } else {
   console.error(`fake openshell: unsupported ${args.join(" ")}`);
   process.exit(1);

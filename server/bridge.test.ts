@@ -1,7 +1,8 @@
 // End-to-end through the real bridge, with test/fake-openshell.mjs as the CLI.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -27,8 +28,12 @@ before(async () => {
 });
 after(() => server.kill());
 
-function connect(headers: Record<string, string> = { Cookie: `sc_token=${TOKEN}`, Origin: BASE }) {
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, { headers });
+const AUTH = { Authorization: `Bearer ${TOKEN}` };
+
+function connect(opts: { origin?: string; token?: string | null } = {}) {
+  const token = opts.token === undefined ? TOKEN : opts.token;
+  const protocols = token === null ? ["sandbox-console"] : ["sandbox-console", `token.${token}`];
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, protocols, { headers: { Origin: opts.origin ?? BASE } });
   const inbox: any[] = [];
   const waiters: { pred: (m: any) => boolean; resolve: (m: any) => void }[] = [];
   ws.on("message", (d) => {
@@ -47,17 +52,67 @@ function connect(headers: Record<string, string> = { Cookie: `sc_token=${TOKEN}`
   return { ws, inbox, next, send, opened: new Promise((r, j) => (ws.on("open", r), ws.on("unexpected-response", (_q, res) => j(res.statusCode)))) };
 }
 
-test("HTTP needs the token; the token URL sets an HttpOnly cookie", async () => {
-  assert.equal((await fetch(`${BASE}/`)).status, 401);
-  assert.equal((await fetch(`${BASE}/?token=nope`, { redirect: "manual" })).status, 403);
-  const r = await fetch(`${BASE}/?token=${TOKEN}`, { redirect: "manual" });
-  assert.equal(r.status, 302);
-  assert.match(r.headers.get("set-cookie")!, /HttpOnly; SameSite=Strict/);
+/** A raw request, so the Host header can be anything. */
+function raw(path: string, headers: Record<string, string> = {}, method = "GET") {
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = request({ host: "127.0.0.1", port: PORT, path, method, headers }, (res) => {
+      let body = "";
+      res.on("data", (d) => (body += d));
+      res.on("end", () => resolve({ status: res.statusCode!, body }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("the API needs the bearer token; no cookie is ever set", async () => {
+  assert.equal((await fetch(`${BASE}/api/ping`)).status, 401);
+  assert.equal((await fetch(`${BASE}/api/ping`, { headers: { Authorization: "Bearer nope-nope" } })).status, 401);
+  const ok = await fetch(`${BASE}/api/ping`, { headers: AUTH });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("set-cookie"), null);
+  assert.equal((await fetch(`${BASE}/api/bundle?sessionId=x`)).status, 401);
 });
 
-test("WebSocket needs the cookie and a local Origin", async () => {
-  await assert.rejects(connect({ Origin: BASE }).opened, (code) => code === 403);
-  await assert.rejects(connect({ Cookie: `sc_token=${TOKEN}`, Origin: "https://evil.example" }).opened, (code) => code === 403);
+test("WebSocket needs the token and a local Origin", async () => {
+  await assert.rejects(connect({ token: null }).opened, (code) => code === 403);
+  await assert.rejects(connect({ token: "wrong-token" }).opened, (code) => code === 403);
+  await assert.rejects(connect({ origin: "https://evil.example" }).opened, (code) => code === 403);
+  // Another local server on a different port is a different origin.
+  await assert.rejects(connect({ origin: "http://127.0.0.1:9999" }).opened, (code) => code === 403);
+});
+
+test("requests for another Host are refused (DNS rebinding)", async () => {
+  assert.equal((await raw("/api/ping", { ...AUTH, Host: "evil.example" })).status, 421);
+  assert.equal((await raw("/", { Host: `attacker.test:${PORT}` })).status, 421);
+});
+
+test("a malformed URL gets 400 and the bridge keeps running", async () => {
+  assert.equal((await raw("/%E0%A4%A")).status, 400);
+  assert.equal((await fetch(`${BASE}/api/ping`, { headers: AUTH })).status, 200);
+});
+
+test("HEAD sends no body", { skip: !existsSync(join(ROOT, "dist/web/index.html")) && "UI not built" }, async () => {
+  const r = await raw("/", {}, "HEAD");
+  assert.equal(r.status, 200);
+  assert.equal(r.body, "");
+});
+
+test("sandbox names that aren't in the list never reach the CLI", async () => {
+  const c = connect();
+  await c.opened;
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+  c.send({ type: "delete_sandbox", reqId: "d1", name: "--all" });
+  const err = await c.next((m) => m.type === "error" && m.reqId === "d1");
+  assert.match(err.message, /no sandbox named "--all"/);
+  c.send({ type: "open_session", reqId: "d2", sandbox: "-g", agent: "opencode", cwd: "/sandbox" });
+  assert.match((await c.next((m) => m.type === "error" && m.reqId === "d2")).message, /no sandbox named/);
+  // Badly shaped messages are refused before anything runs.
+  c.send({ type: "open_session", reqId: "d3", sandbox: ["opencode-demo"], agent: "opencode", cwd: "/sandbox" });
+  assert.match((await c.next((m) => m.type === "error" && m.reqId === "d3")).message, /Bad message/);
+  c.send({ type: "no_such_thing" });
+  assert.match((await c.next((m) => m.type === "error" && /unknown type/.test(m.message))).message, /no_such_thing/);
+  c.ws.close();
 });
 
 test("a full turn: plan, diff, permission, fs refusal, end_turn", async () => {
@@ -130,4 +185,26 @@ test("a missing agent command reports exit 127 with the adapter hint", async () 
   assert.match(err.message, /exited \(code 127\)/);
   assert.match(err.hint, /make claude-sandbox/);
   c.ws.close();
+});
+
+test("git bundle download: success, branch names that aren't Latin-1, and errors", async () => {
+  const c = connect();
+  await c.opened;
+  const hello = await c.next((m) => m.type === "hello");
+  const sid = hello.sessions.find((s: any) => s.sandbox === "opencode-demo").sessionId;
+  c.ws.close();
+
+  const r = await fetch(`${BASE}/api/bundle?sessionId=${sid}&dir=/sandbox/repo`, { headers: AUTH });
+  assert.equal(r.status, 200);
+  assert.equal(decodeURIComponent(r.headers.get("x-bundle-branch")!), "agent/ünï");
+  assert.equal(r.headers.get("x-bundle-commits"), "2");
+  assert.match(r.headers.get("content-disposition")!, /^attachment; filename="opencode-demo-[A-Za-z0-9._-]+\.bundle"$/);
+  assert.equal(await r.text(), "# v2 git bundle (fake)\n");
+
+  const notRepo = await fetch(`${BASE}/api/bundle?sessionId=${sid}&dir=/sandbox/nothing`, { headers: AUTH });
+  assert.equal(notRepo.status, 500);
+  assert.match((await notRepo.json()).detail, /not a git repository/);
+
+  const relative = await fetch(`${BASE}/api/bundle?sessionId=${sid}&dir=--upload-pack=x`, { headers: AUTH });
+  assert.equal(relative.status, 400);
 });

@@ -9,6 +9,7 @@ import type {
   ServerMessage,
   SessionInfo,
 } from "../../shared/protocol.ts";
+import { authHeaders, getToken, initToken, wsProtocols } from "./auth.ts";
 import { apply, type Conversation, emptyConversation } from "./conversation.ts";
 
 export interface SessionView {
@@ -47,7 +48,10 @@ export class RequestError extends Error {
   }
 }
 
-const initialSelected = () => decodeURIComponent(location.hash.match(/^#sb=(.+)$/)?.[1] ?? "") || null;
+// Before anything reads the URL: take the token out of it.
+initToken();
+
+const initialSelected = () => new URLSearchParams(location.hash.slice(1)).get("sb") || null;
 
 class Store {
   state: State = {
@@ -79,7 +83,8 @@ class Store {
   }
 
   connect() {
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+    if (!getToken()) return this.set({ link: "unauthorized" });
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`, wsProtocols());
     this.ws = ws;
     this.set({ link: "connecting" });
     let opened = false;
@@ -94,8 +99,8 @@ class Store {
       for (const p of this.pending.values()) p.reject(new RequestError("Lost the connection to the console bridge."));
       this.pending.clear();
       if (!opened) {
-        // The upgrade is refused without the cookie, e.g. after the bridge restarted with a new token.
-        const r = await fetch("/", { method: "HEAD" }).catch(() => null);
+        // The upgrade is refused with a wrong token, e.g. after the bridge restarted with a new one.
+        const r = await fetch("/api/ping", { headers: authHeaders() }).catch(() => null);
         if (r?.status === 401) return this.set({ link: "unauthorized" });
       }
       this.set({ link: "closed" });
@@ -140,7 +145,7 @@ class Store {
   }
 
   select(name: string | null) {
-    history.replaceState(null, "", name ? `#sb=${encodeURIComponent(name)}` : location.pathname);
+    history.replaceState(null, "", name ? `#${new URLSearchParams({ sb: name })}` : location.pathname);
     this.set({ selected: name });
   }
 

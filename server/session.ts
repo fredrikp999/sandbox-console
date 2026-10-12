@@ -4,8 +4,9 @@ import { spawn } from "node:child_process";
 import type { AvailableCommand, SessionConfigOption, Usage } from "@agentclientprotocol/sdk";
 import type { ActivityState, PastSession, ServerMessage, SessionEvent, SessionInfo } from "../shared/protocol.ts";
 import type { AgentConfig } from "./config.ts";
+import { bound } from "./eventlog.ts";
 import { exitHint, rpcHint } from "./hints.ts";
-import { OPENSHELL } from "./openshell.ts";
+import { OPENSHELL, sandboxArg } from "./openshell.ts";
 import { JsonRpcPeer, METHOD_NOT_FOUND, RpcError, TransportClosed } from "./rpc.ts";
 
 const INIT_TIMEOUT = 60_000;
@@ -29,7 +30,7 @@ export interface SessionHost {
 }
 
 export function agentCommand(sandbox: string, agent: AgentConfig, cwd: string, model?: string): string[] {
-  const args = ["sandbox", "exec", sandbox, "--no-tty", "--no-login-shell", "--workdir", cwd];
+  const args = ["sandbox", "exec", sandboxArg(sandbox), "--no-tty", "--no-login-shell", "--workdir", cwd];
   if (agent.modelEnv && (model || agent.defaultModel)) {
     // `opencode acp` has no -m flag: the model goes in through its config env.
     args.push("--env", `${agent.modelEnv}=${JSON.stringify({ model: model || agent.defaultModel })}`);
@@ -314,7 +315,7 @@ export class Session {
   private record(ev: NewEvent) {
     const full = { ...ev, sessionId: this.sessionId ?? "", seq: ++this.seq, ts: Date.now() } as SessionEvent;
     this.log.push(full);
-    if (this.log.length > MAX_EVENTS) this.log.splice(0, this.log.length - MAX_EVENTS);
+    if (this.log.length > MAX_EVENTS) this.log = bound(this.log, MAX_EVENTS);
     this.lastActivity = full.ts;
     // Without an id yet, tabs get it in the replay after session_opened.
     if (this.sessionId) this.host.publish(this, full);

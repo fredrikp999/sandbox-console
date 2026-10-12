@@ -2,6 +2,7 @@
 // arguments as an array (DESIGN.md section 9).
 import { spawn } from "node:child_process";
 import type { NetworkHost } from "../shared/protocol.ts";
+import { SANDBOX_NAME } from "./validate.ts";
 
 export const OPENSHELL = process.env.OPENSHELL_BIN ?? "openshell";
 
@@ -19,6 +20,12 @@ export interface RunResult {
   code: number | null;
   stdout: string;
   stderr: string;
+}
+
+/** A sandbox name that is safe as a positional argument (never read as a flag). */
+export function sandboxArg(name: string): string {
+  if (!SANDBOX_NAME.test(name)) throw new CliError(`Invalid sandbox name ${JSON.stringify(name)}`, "");
+  return name;
 }
 
 /** Run `openshell <args>` and collect its output. Rejects only if it can't start or times out. */
@@ -98,7 +105,7 @@ export async function listSandboxes(): Promise<RawSandbox[]> {
 }
 
 export function getSandbox(name: string): Promise<RawSandbox> {
-  return json<RawSandbox>(["sandbox", "get", name]);
+  return json<RawSandbox>(["sandbox", "get", sandboxArg(name)]);
 }
 
 export function readyMessage(s: RawSandbox): string | undefined {
@@ -125,7 +132,7 @@ export interface CreateOptions {
 
 /** Same call as sandbox.sh: the sandbox runs `sleep infinity` and is reused. */
 export function createSandbox(o: CreateOptions): Promise<string> {
-  const args = ["sandbox", "create", "--name", o.name, "--from", o.image];
+  const args = ["sandbox", "create", "--name", sandboxArg(o.name), "--from", o.image];
   if (o.provider) args.push("--provider", o.provider);
   if (o.policy) args.push("--policy", o.policy);
   args.push("--detach", "--", "sleep", "infinity");
@@ -133,16 +140,16 @@ export function createSandbox(o: CreateOptions): Promise<string> {
 }
 
 export function deleteSandbox(name: string): Promise<string> {
-  return runOk(["sandbox", "delete", name], 120_000);
+  return runOk(["sandbox", "delete", sandboxArg(name)], 120_000);
 }
 
 /** Run a shell script in the sandbox, with arguments passed as $1, $2, ... (as bundle.sh does). */
 export function execScript(sandbox: string, script: string, args: string[], timeoutMs = 120_000) {
-  return run(["sandbox", "exec", sandbox, "--no-tty", "--no-login-shell", "--", "sh", "-c", script, "sh", ...args], timeoutMs);
+  return run(["sandbox", "exec", sandboxArg(sandbox), "--no-tty", "--no-login-shell", "--", "sh", "-c", script, "sh", ...args], timeoutMs);
 }
 
 export function download(sandbox: string, remotePath: string, localDir: string) {
-  return runOk(["sandbox", "download", sandbox, remotePath, localDir], 300_000);
+  return runOk(["sandbox", "download", sandboxArg(sandbox), remotePath, localDir], 300_000);
 }
 
 // ---- network events from `openshell logs`
@@ -169,6 +176,6 @@ export function parseNetworkLog(text: string, sinceMs = 0): NetworkHost[] {
 
 export async function networkSince(sandbox: string, sinceMs: number): Promise<NetworkHost[]> {
   const secs = Math.max(1, Math.ceil((Date.now() - sinceMs) / 1000) + 5);
-  const out = await runOk(["logs", sandbox, "-n", "5000", "--since", `${secs}s`, "--source", "sandbox"]);
+  const out = await runOk(["logs", sandboxArg(sandbox), "-n", "5000", "--since", `${secs}s`, "--source", "sandbox"]);
   return parseNetworkLog(out, sinceMs);
 }

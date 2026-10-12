@@ -1,3 +1,5 @@
+import { authHeaders } from "./auth.ts";
+
 // "Download as git bundle" / `/bundle`: the bridge bundles the agent's commits in
 // the sandbox and streams the file; we hand it to the browser as a download.
 export type BundleStatus = { tone: "busy" | "ok" | "error"; text: string };
@@ -7,7 +9,7 @@ export async function downloadBundle(sessionId: string, dir: string | undefined,
   const q = new URLSearchParams({ sessionId });
   if (dir) q.set("dir", dir);
   try {
-    const r = await fetch(`/api/bundle?${q}`);
+    const r = await fetch(`/api/bundle?${q}`, { headers: authHeaders() });
     if (!r.ok) {
       let msg = `${r.status} ${r.statusText}`;
       try {
@@ -20,9 +22,17 @@ export async function downloadBundle(sessionId: string, dir: string | undefined,
       return;
     }
     const name = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") ?? "")?.[1] ?? "agent.bundle";
-    const branch = r.headers.get("X-Bundle-Branch") ?? "";
+    // Percent-encoded by the bridge: branch names come from the sandbox and may not be Latin-1.
+    const header = (h: string) => {
+      try {
+        return decodeURIComponent(r.headers.get(h) ?? "");
+      } catch {
+        return r.headers.get(h) ?? "";
+      }
+    };
+    const branch = header("X-Bundle-Branch");
     const commits = r.headers.get("X-Bundle-Commits") ?? "?";
-    const base = r.headers.get("X-Bundle-Base");
+    const base = header("X-Bundle-Base");
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = Object.assign(document.createElement("a"), { href: url, download: name });

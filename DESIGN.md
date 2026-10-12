@@ -203,7 +203,7 @@ Start with (b), falling back to (c).
 
 ## 8. Security
 - **Advertise no client `fs` or `terminal` capability** in `initialize`. Otherwise the agent may ask the console to read, write or run things on the *host*. Refuse any `fs/*` or `terminal/*` request with JSON-RPC error `-32601`.
-- **Localhost only, with a random token.** The bridge binds to `127.0.0.1` and requires a random token, printed at start-up and passed in the URL, then kept in a cookie. Without it, other local users or any web page could drive your agents over the WebSocket. Check the `Origin` header too.
+- **Localhost only, with a random token.** The bridge binds to `127.0.0.1` and requires a random token, printed at start-up and passed in the URL fragment, then kept in `localStorage`. Without it, other local users or any web page could drive your agents over the WebSocket. The token is sent as a WebSocket subprotocol and as a `Bearer` header on `/api/*`. No cookie is used, because cookies are shared by all ports on `127.0.0.1` and would reach any other local server. Check the `Origin` and `Host` headers too.
 - **No credentials** in the bridge or the UI. Providers stay in the OpenShell gateway.
 - **Sandbox policy rules unchanged.** The console opens no ports and changes no network rules.
 - **Code leaves the sandbox only through git bundles you review**, as in the openshell-configs README.
@@ -212,7 +212,7 @@ Start with (b), falling back to (c).
 ## 9. Tech stack
 - **Bridge:** Node 22+, TypeScript, `@agentclientprotocol/sdk`, `ws`, plus a small HTTP server (Fastify or plain `node:http`). Calls the `openshell` CLI with `child_process.spawn`, never through a shell, with arguments passed as an array.
 - **UI:** React with Vite. Use a Markdown renderer with HTML disabled, a diff view (e.g. `react-diff-view`), and CSS variables for theming. A component library is optional; the mockup uses plain CSS.
-- **Start-up:** `npm start` or `./console.sh` starts the bridge, prints `http://127.0.0.1:<port>/?token=…`, and opens it.
+- **Start-up:** `npm start` or `./console.sh` starts the bridge, prints `http://127.0.0.1:<port>/#token=…`, and opens it.
 - **Later:** wrap in Tauri for a desktop app. The bridge becomes the sidecar, and the UI doesn't change.
 
 ## 10. Phases

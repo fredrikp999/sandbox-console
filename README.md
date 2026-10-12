@@ -10,7 +10,7 @@ A local web app that lists your OpenShell sandboxes and lets you work with the c
 npm start               # same, without opening the browser
 ```
 
-The bridge prints `http://127.0.0.1:7801/?token=…`. The token is new on every start. Opening that URL stores it in an HttpOnly cookie, so reload works, but after a restart you need the new URL.
+The bridge prints `http://127.0.0.1:7801/#token=…`. The token is new on every start. The page moves it out of the address bar into `localStorage`, so reloads and new tabs work, but after a restart you need the new URL. `--open` passes the URL to the browser through a private temporary file, so the token never appears on a command line.
 
 Requires Node 22+, and `openshell` on the PATH with a running gateway. Sandboxes come from [openshell-configs](https://github.com/fredrikp999/openshell-configs). Set `OPENSHELL_CONFIGS` to that checkout so new sandboxes get `policies/vscode-terminal.yaml`, like `sandbox.sh`. The console also looks in `~/openshell-configs/openshell-configs`.
 
@@ -36,7 +36,9 @@ A fake CLI with a scripted agent. A turn plays a plan, an edit with a diff, a pe
 
 ```
 server/        the bridge (Node, TypeScript, run with tsx)
-  index.ts       HTTP + WebSocket on 127.0.0.1, token cookie, Origin check, CSP, /api/bundle
+  index.ts       HTTP + WebSocket on 127.0.0.1: token auth, Host and Origin checks, CSP, /api/bundle
+  validate.ts    shape checks for browser messages, sandbox name rules
+  eventlog.ts    keeps the per-session event log bounded without breaking replay
   console.ts     sandbox polling, agent detection, sessions, browser messages
   session.ts     one `openshell sandbox exec … <agent>` per sandbox: handshake, event log, permissions
   rpc.ts         JSON-RPC over stdio (newline-delimited)
