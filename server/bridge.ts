@@ -14,6 +14,7 @@ import type {
   ServerMessage,
 } from "../shared/protocol.ts";
 import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
+import * as editor from "./editor.ts";
 import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
 import * as repos from "./repos.ts";
@@ -38,6 +39,7 @@ export class Bridge implements SessionHost {
   readonly agents = loadAgents();
   readonly state = new StateStore();
   readonly policy = findPolicy();
+  readonly editors = editor.availableEditors();
   private threadStore = new ThreadStore(join(dirname(this.state.file), "threads"));
   /** Saved threads that no agent process has loaded since the bridge started (or the process exited). Shown as exited. */
   private archive = new Map<string, StoredThread>(); // by session id
@@ -106,6 +108,7 @@ export class Bridge implements SessionHost {
         ...[...this.archive.values()].map((a) => a.info),
       ],
       canCreate: true,
+      editors: this.editors,
       createNote: this.policy ? undefined : "No policies/vscode-terminal.yaml found (set OPENSHELL_CONFIGS); new sandboxes get the default policy.",
     });
     this.send(tab, { type: "gateway", gateway: this.gateway });
@@ -285,6 +288,21 @@ export class Bridge implements SessionHost {
 
       case "repo":
         return this.repo(tab, msg);
+
+      case "open_editor": {
+        if (!editor.isEditor(msg.editor)) throw new Error(`Unknown editor ${msg.editor}`);
+        const sb = this.sandbox(msg.sandbox);
+        if (sb.phase !== "Ready") throw new Error(`Sandbox ${sb.name} is ${sb.phase}, not Ready.`);
+        const r = await editor.openEditor(msg.editor, sb.name, msg.folder);
+        this.send(tab, { type: "editor_opened", reqId: msg.reqId, ...r });
+        return;
+      }
+
+      case "editor_setting":
+        if (!editor.isEditor(msg.editor)) throw new Error(`Unknown editor ${msg.editor}`);
+        editor.addServerSetting(msg.editor);
+        this.send(tab, { type: "result", reqId: msg.reqId, ok: true, message: "Added. Reload any open window for it to apply." });
+        return;
 
       case "delete_sandbox": {
         this.sandbox(msg.name);

@@ -94,6 +94,13 @@ export interface RepoReview {
 
 export type RepoOp = "link" | "send" | "get" | "review" | "merge" | "push" | "unlink";
 
+export type EditorId = "vscode" | "cursor";
+
+export interface EditorInfo {
+  id: EditorId;
+  label: string;
+}
+
 export interface GatewayStatus {
   name: string;
   status: string;
@@ -197,6 +204,10 @@ export type ClientMessage =
   | { type: "permission_answer"; sessionId: string; requestId: string; optionId: string | null }
   | { type: "subscribe"; sessionId: string; sinceSeq: number }
   | { type: "network"; reqId: string; sessionId: string }
+  /** Open a folder of the sandbox in an editor on this machine (Remote-SSH through the gateway). */
+  | { type: "open_editor"; reqId: string; sandbox: string; editor: EditorId; folder: string }
+  /** Add "remote.SSH.localServerDownload": "always" to the editor's user settings. */
+  | { type: "editor_setting"; reqId: string; editor: EditorId }
   /**
    * Repository actions for a sandbox. link: clone `source` (a URL) into `dest`, or use
    * `source` as a host path, and send it in. send: pull base from origin and send it in.
@@ -223,6 +234,8 @@ export type ServerMessage =
       sessions: SessionInfo[];
       canCreate: boolean;
       createNote?: string;
+      /** Editors whose command line was found, for "Open in …". */
+      editors: EditorInfo[];
     }
   | { type: "sandboxes"; sandboxes: SandboxRow[]; error?: string }
   | { type: "gateway"; gateway: GatewayStatus }
@@ -234,6 +247,7 @@ export type ServerMessage =
   | { type: "past_sessions"; reqId: string; sessionId: string; sessions: PastSession[]; error?: string }
   | { type: "network"; reqId: string; sessionId: string; hosts: NetworkHost[]; error?: string }
   | { type: "result"; reqId: string; ok: boolean; message?: string; hint?: string }
+  | { type: "editor_opened"; reqId: string; log: string[]; needsSetting: boolean }
   /** What a repo action did, step by step, and the review if it produced one. */
   | { type: "repo_result"; reqId: string; sandbox: string; repo: string | null; log: string[]; review?: RepoReview }
   | { type: "error"; reqId?: string; sessionId?: string; message: string; detail?: string; hint?: string }

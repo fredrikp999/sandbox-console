@@ -1237,6 +1237,14 @@ kbd {
 .repo-out .hint {
   color: var(--fg);
 }
+.editor-open {
+  display: grid;
+  gap: 8px;
+}
+.editor-open select.opt {
+  justify-self: start;
+  max-width: 100%;
+}
 .modal.review {
   width: min(1100px, 100%);
   max-height: calc(100dvh - 32px);

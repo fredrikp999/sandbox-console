@@ -4,6 +4,7 @@ import type { NetworkHost, PastSession, ServerMessage } from "../../../shared/pr
 import { type BundleStatus, downloadBundle } from "../bundle.ts";
 import { ago, relPath, sandboxStatus, shortId, tokens } from "../format.ts";
 import { type RequestError, type SessionView, store, useStore } from "../store.ts";
+import { OpenEditor } from "./OpenEditor.tsx";
 import { Repos } from "./Repos.tsx";
 import { DeleteSandbox } from "./StartSession.tsx";
 
@@ -261,6 +262,7 @@ export function Inspector() {
 
         <div className="blk">
           <h5>Sandbox</h5>
+          {sb && <OpenEditor sb={sb} cwd={info?.cwd} />}
           {info && alive && (
             <button
               type="button"

@@ -21,6 +21,8 @@ const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   permission_answer: { sessionId: "s", requestId: "s", optionId: "s|null" },
   subscribe: { sessionId: "s", sinceSeq: "n" },
   network: { reqId: "s", sessionId: "s" },
+  open_editor: { reqId: "s", sandbox: "s", editor: "s", folder: "s" },
+  editor_setting: { reqId: "s", editor: "s" },
   repo: { reqId: "s", sandbox: "s", op: "s", repo: "s?", source: "s?", base: "s?", dest: "s?" },
 };
 

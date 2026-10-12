@@ -88,7 +88,13 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works.
 - **Earlier threads:** reopen one with `session/load`; it becomes another thread.
 - **Repository:** bring a repo in, get the agent's work out, review and merge it. See below.
+- **Open in VS Code** (or Cursor): opens a folder of the sandbox (a linked repository, or the session's directory) in a Remote-SSH window. See below.
 - **Stop the agent process** and **Delete sandbox**.
+
+**VS Code.** Needs the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension and the `code` command (in VS Code: *Shell Command: Install 'code' command in PATH*; the console also looks in `/Applications`).
+- **How it connects:** over SSH through the gateway (`openshell ssh-proxy`); the sandbox exposes no port. The host entry `openshell-<sandbox>.default` lives in `~/.config/openshell/ssh_config`, which OpenShell includes from `~/.ssh/config`. The console adds a missing entry there; on a machine where that was never set up, it lets `openshell sandbox connect --editor vscode` do it the first time.
+- **VS Code Server:** the sandbox can't download it, so VS Code needs `"remote.SSH.localServerDownload": "always"`. The console tells you when it's missing and can add it.
+- **Terminal:** the sandbox needs the terminal policy (`policies/vscode-terminal.yaml`, which "New sandbox" uses); the console warns when it's missing.
 
 **Working on a repository.** The **Repository** block in the right column does what openshell-configs' `bundle.sh` does, plus the host side around it.
 - **Bring into sandbox:** give a URL (`git@github.com:you/app.git`, `https://…`) or a path on this machine (`~/code/app`). A URL is cloned here, into `~/sandbox-repos/<name>` unless you choose a directory, with your own git credentials. The base branch (origin's default unless you name one) goes into the sandbox as a git bundle: `/sandbox/<name>`, on branch `agent/<sandbox>`. New sessions in that sandbox start in that directory.
@@ -116,6 +122,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 | `OPENSHELL_POLICY` | A policy file for new sandboxes, instead of the one above. |
 | `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. Threads (their conversations) are saved in a `threads/` folder next to it. |
 | `CONSOLE_REPOS` | Where repositories given as a URL are cloned. Default `~/sandbox-repos`. |
+| `CONSOLE_VSCODE`, `CONSOLE_CURSOR` | The editor's command line, if it isn't `code` / `cursor` on the PATH or in `/Applications`. |
 | `CONSOLE_TOKEN` | A fixed access token instead of a random one (at least 8 characters of `A-Z a-z 0-9 _ -`). Mainly for scripting and tests. |
 
 ## Security
@@ -154,6 +161,7 @@ server/              the bridge (Node, TypeScript, run with tsx)
   rpc.ts               JSON-RPC over stdio (newline-delimited)
   openshell.ts         CLI wrapper and the `openshell logs` network parser
   bundle.ts            git bundle out of the sandbox (bundle.sh "out")
+  editor.ts            "Open in VS Code": SSH host entry, then the editor's CLI on a vscode-remote:// folder
   repos.ts             repositories: clone/pull on the host, bundles in and out, review, merge, push
   threadstore.ts       threads on disk
   validate.ts          shape checks for browser messages, sandbox name rules

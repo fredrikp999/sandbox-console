@@ -1,7 +1,7 @@
 // Client state: one WebSocket to the bridge, the sandbox list, and a folded
 // conversation per open session. Reconnects and replays what it missed.
 import { useSyncExternalStore } from "react";
-import type { AgentInfo, ClientMessage, GatewayStatus, SandboxRow, ServerMessage, SessionInfo } from "../../shared/protocol.ts";
+import type { AgentInfo, ClientMessage, EditorInfo, GatewayStatus, SandboxRow, ServerMessage, SessionInfo } from "../../shared/protocol.ts";
 import { authHeaders, getToken, initToken, wsProtocols } from "./auth.ts";
 import { apply, type Conversation, emptyConversation } from "./conversation.ts";
 
@@ -19,6 +19,7 @@ export type Link = "connecting" | "open" | "closed" | "unauthorized";
 export interface State {
   link: Link;
   agents: AgentInfo[];
+  editors: EditorInfo[];
   createNote?: string;
   sandboxes: SandboxRow[];
   listError?: string;
@@ -62,6 +63,7 @@ class Store {
   state: State = {
     link: "connecting",
     agents: [],
+    editors: [],
     sandboxes: [],
     gateway: null,
     sessions: {},
@@ -240,7 +242,7 @@ class Store {
   private reduce(s: State, m: ServerMessage): State {
     switch (m.type) {
       case "hello": {
-        let next: State = { ...s, agents: m.agents, createNote: m.createNote };
+        let next: State = { ...s, agents: m.agents, editors: m.editors ?? [], createNote: m.createNote };
         const live = new Set(m.sessions.map((x) => x.sessionId));
         // Forget sessions the bridge no longer has (e.g. it restarted).
         const sessions = Object.fromEntries(Object.entries(next.sessions).filter(([id]) => live.has(id)));
@@ -286,6 +288,7 @@ class Store {
       case "past_sessions":
       case "network":
       case "repo_result":
+      case "editor_opened":
         this.settle(m);
         if (m.type === "error" && !m.reqId) {
           const id = m.sessionId;
