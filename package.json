@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fredrikp999/acpclient-4-sandboxes.git"
+    "url": "git+https://github.com/fredrikp999/sandbox-console.git"
   },
   "type": "module",
   "engines": {
