@@ -29,6 +29,8 @@ export interface SandboxRow {
   /** Defaults the console remembers for this sandbox. */
   cwd?: string;
   model?: string;
+  /** Host repositories brought into this sandbox. */
+  repos: RepoLink[];
   /** The agent process; `state` is the most urgent of its threads. */
   session?: {
     /** The thread touched last. */
@@ -38,6 +40,59 @@ export interface SandboxRow {
     agent: AgentId;
   };
 }
+
+/**
+ * A host repository brought into a sandbox with git bundles (as openshell-configs'
+ * bundle.sh does). Its base branch goes in as host/<base>; the agent works on
+ * `branch`, which comes back out into the host repo under the same name.
+ */
+export interface RepoLink {
+  /** Its directory name in /sandbox; unique per sandbox. */
+  name: string;
+  /** The git work tree on this machine. */
+  hostPath: string;
+  /** The URL it was cloned from, if the console cloned it. */
+  cloneUrl?: string;
+  base: string;
+  branch: string;
+  sandboxPath: string;
+  sentAt?: number;
+  fetchedAt?: number;
+  mergedAt?: number;
+}
+
+export interface RepoCommit {
+  sha: string;
+  author: string;
+  time: number;
+  subject: string;
+}
+
+export interface RepoFile {
+  path: string;
+  added: number;
+  removed: number;
+  binary: boolean;
+  /** The file's part of the unified diff, without the `diff --git` header lines. */
+  patch: string;
+}
+
+/** The agent's branch on the host compared with the base branch. */
+export interface RepoReview {
+  base: string;
+  branch: string;
+  /** False until the agent's commits have been fetched out at least once. */
+  hasBranch: boolean;
+  /** Commits on the branch that aren't in base, newest first. */
+  commits: RepoCommit[];
+  /** Commits on base the branch doesn't have; merging then needs a merge commit. */
+  behind: number;
+  files: RepoFile[];
+  /** The diff was too big to send whole. */
+  truncated: boolean;
+}
+
+export type RepoOp = "link" | "send" | "get" | "review" | "merge" | "push" | "unlink";
 
 export interface GatewayStatus {
   name: string;
@@ -141,7 +196,23 @@ export type ClientMessage =
   | { type: "set_option"; reqId: string; sessionId: string; configId: string; value: string }
   | { type: "permission_answer"; sessionId: string; requestId: string; optionId: string | null }
   | { type: "subscribe"; sessionId: string; sinceSeq: number }
-  | { type: "network"; reqId: string; sessionId: string };
+  | { type: "network"; reqId: string; sessionId: string }
+  /**
+   * Repository actions for a sandbox. link: clone `source` (a URL) into `dest`, or use
+   * `source` as a host path, and send it in. send: pull base from origin and send it in.
+   * get: fetch the agent's commits out, then review. merge: merge the branch into base
+   * on the host. push: push base to origin. unlink: forget the link (no files change).
+   */
+  | {
+      type: "repo";
+      reqId: string;
+      sandbox: string;
+      op: RepoOp;
+      repo?: string;
+      source?: string;
+      base?: string;
+      dest?: string;
+    };
 
 // ---- bridge -> browser
 
@@ -163,5 +234,7 @@ export type ServerMessage =
   | { type: "past_sessions"; reqId: string; sessionId: string; sessions: PastSession[]; error?: string }
   | { type: "network"; reqId: string; sessionId: string; hosts: NetworkHost[]; error?: string }
   | { type: "result"; reqId: string; ok: boolean; message?: string; hint?: string }
+  /** What a repo action did, step by step, and the review if it produced one. */
+  | { type: "repo_result"; reqId: string; sandbox: string; repo: string | null; log: string[]; review?: RepoReview }
   | { type: "error"; reqId?: string; sessionId?: string; message: string; detail?: string; hint?: string }
   | SessionEvent;

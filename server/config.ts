@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentId, AgentInfo } from "../shared/protocol.ts";
+import type { AgentId, AgentInfo, RepoLink } from "../shared/protocol.ts";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -51,6 +51,7 @@ export interface Remembered {
   agent?: AgentId;
   cwd?: string;
   model?: string;
+  repos?: RepoLink[];
 }
 
 export class StateStore {

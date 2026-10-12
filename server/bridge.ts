@@ -2,10 +2,21 @@
 // handles messages from the browser tabs.
 import { dirname, join } from "node:path";
 import type { WebSocket } from "ws";
-import type { AgentId, ClientMessage, GatewayStatus, NetworkHost, SandboxRow, ServerMessage } from "../shared/protocol.ts";
+import type {
+  AgentId,
+  ClientMessage,
+  GatewayStatus,
+  NetworkHost,
+  RepoLink,
+  RepoOp,
+  RepoReview,
+  SandboxRow,
+  ServerMessage,
+} from "../shared/protocol.ts";
 import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
 import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
+import * as repos from "./repos.ts";
 import { Session, type SessionHost, type Thread } from "./session.ts";
 import { type StoredThread, ThreadStore } from "./threadstore.ts";
 import { NEW_SANDBOX_NAME, parseClientMessage, SANDBOX_NAME } from "./validate.ts";
@@ -16,6 +27,7 @@ const STATUS_EVERY = 10_000;
 const DETECT_TTL = 60_000;
 /** Network results are shared by all tabs for this long. */
 const NETWORK_TTL = 10_000;
+const REPO_OPS: RepoOp[] = ["link", "send", "get", "review", "merge", "push", "unlink"];
 
 interface Tab {
   ws: WebSocket;
@@ -38,6 +50,8 @@ export class Bridge implements SessionHost {
   private network = new Map<string, { at: number; since: number; result: Promise<NetworkHost[]> }>(); // by sandbox
   private gateway: GatewayStatus = { name: "openshell", status: "unknown" };
   private timers: NodeJS.Timeout[] = [];
+  /** Sandboxes with a repository action running: one at a time each. */
+  private repoBusy = new Set<string>();
 
   constructor() {
     for (const t of this.threadStore.loadAll()) {
@@ -269,6 +283,9 @@ export class Bridge implements SessionHost {
       case "create_sandbox":
         return this.create(tab, msg);
 
+      case "repo":
+        return this.repo(tab, msg);
+
       case "delete_sandbox": {
         this.sandbox(msg.name);
         this.sessions.get(msg.name)?.close();
@@ -281,6 +298,100 @@ export class Bridge implements SessionHost {
         return;
       }
     }
+  }
+
+  private async repo(tab: Tab, msg: Extract<ClientMessage, { type: "repo" }>) {
+    if (!REPO_OPS.includes(msg.op)) throw new Error(`Unknown repository action ${msg.op}`);
+    const sb = this.sandbox(msg.sandbox);
+    const name = sb.name;
+    const links = this.state.get(name).repos ?? [];
+    const save = (r: RepoLink) => this.state.set(name, { repos: [...links.filter((x) => x.name !== r.name), r] });
+    const ready = () => {
+      if (sb.phase !== "Ready") throw new Error(`Sandbox ${name} is ${sb.phase}, not Ready.`);
+    };
+    const linked = () => {
+      const r = links.find((x) => x.name === msg.repo);
+      if (!r) throw new Error(`No repository ${JSON.stringify(msg.repo ?? "")} is linked to ${name}.`);
+      return { ...r };
+    };
+    if (this.repoBusy.has(name)) throw new Error(`Another repository action is running for ${name}. Wait for it to finish.`);
+    this.repoBusy.add(name);
+    const log: string[] = [];
+    let r: RepoLink | null = null;
+    let review: RepoReview | undefined;
+    try {
+      switch (msg.op) {
+        case "link": {
+          ready();
+          r = await repos.link({ sandbox: name, source: msg.source ?? "", base: msg.base, dest: msg.dest }, links, log);
+          // Saved before sending, so a failed send can be retried with "Send latest".
+          save(r);
+          await repos.sendIn(name, r, log);
+          r.sentAt = Date.now();
+          save(r);
+          const cwd = this.state.get(name).cwd;
+          if (!cwd || cwd === "/sandbox") {
+            this.state.set(name, { cwd: r.sandboxPath });
+            log.push(`New sessions in ${name} start in ${r.sandboxPath}.`);
+          }
+          break;
+        }
+        case "send":
+          ready();
+          r = linked();
+          await repos.sendIn(name, r, log);
+          r.sentAt = Date.now();
+          save(r);
+          break;
+        case "get":
+          ready();
+          r = linked();
+          await repos.getOut(name, r, log);
+          r.fetchedAt = Date.now();
+          save(r);
+          review = await repos.review(r);
+          break;
+        case "review":
+          r = linked();
+          review = await repos.review(r);
+          break;
+        case "merge":
+          r = linked();
+          await repos.merge(r, log);
+          r.mergedAt = Date.now();
+          save(r);
+          // So the sandbox counts its next commits from what was merged.
+          if (sb.phase === "Ready") {
+            try {
+              await repos.sendIn(name, r, log, false);
+              r.sentAt = Date.now();
+              save(r);
+            } catch (e) {
+              log.push(`warning: couldn't send the merged ${r.base} into the sandbox: ${(e as Error).message}`);
+            }
+          }
+          review = await repos.review(r);
+          break;
+        case "push":
+          r = linked();
+          await repos.push(r, log);
+          break;
+        case "unlink":
+          r = linked();
+          this.state.set(name, { repos: links.filter((x) => x.name !== r?.name) });
+          log.push(`Unlinked ${r.name}. Nothing was deleted: ${r.hostPath} and ${r.sandboxPath} are still there.`);
+          break;
+      }
+    } catch (e) {
+      // Keep what did happen before the failure (e.g. the clone).
+      const err = e as Explained;
+      if (log.length) err.detail = [...log, err.detail].filter(Boolean).join("\n");
+      throw err;
+    } finally {
+      this.repoBusy.delete(name);
+      this.changed();
+    }
+    this.send(tab, { type: "repo_result", reqId: msg.reqId, sandbox: name, repo: r?.name ?? null, log, review });
   }
 
   /** Forget a thread, live or saved. False if there is no such thread. */
@@ -464,6 +575,7 @@ export class Bridge implements SessionHost {
         message: s.phase === "Ready" ? undefined : os.readyMessage(s),
         cwd: remembered.cwd,
         model: remembered.model,
+        repos: remembered.repos ?? [],
         session: session && {
           sessionId: session.latest?.sessionId ?? null,
           state: session.state,

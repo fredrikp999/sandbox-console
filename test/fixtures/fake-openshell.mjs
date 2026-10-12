@@ -7,6 +7,9 @@
 // Prompts containing "fail" return a JSON-RPC error; "exit" makes the agent exit;
 // anything else plays a turn with a plan, an edit with a diff, a permission
 // request for a command, and a refused fs/read_text_file request.
+//
+// With FAKE_SANDBOX_ROOT set, `sandbox exec … sh -c`, `upload` and `download` are
+// real: they run on this machine with /sandbox mapped to that directory (repos.test.ts).
 import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
@@ -24,7 +27,21 @@ const SANDBOXES = [
 ];
 
 const [a, b] = args;
-if (a === "status") out({ gateway: "openshell", status: "connected", version: "fake" });
+const ROOT = process.env.FAKE_SANDBOX_ROOT;
+const inBox = (p) => p.replaceAll("/sandbox", ROOT);
+if (ROOT && a === "sandbox" && b === "exec" && args.includes("sh")) {
+  const { spawnSync } = await import("node:child_process");
+  const [script, ...rest] = args.slice(args.indexOf("--") + 3);
+  const r = spawnSync("sh", ["-c", inBox(script), ...rest.map(inBox)], { stdio: "inherit" });
+  process.exit(r.status ?? 1);
+} else if (ROOT && a === "sandbox" && (b === "upload" || b === "download")) {
+  const { copyFileSync } = await import("node:fs");
+  const { basename, join } = await import("node:path");
+  const [from, to] = args.slice(3);
+  const src = b === "download" ? inBox(from) : from;
+  const dir = b === "upload" ? inBox(to) : to;
+  copyFileSync(src, join(dir, basename(src)));
+} else if (a === "status") out({ gateway: "openshell", status: "connected", version: "fake" });
 else if (a === "sandbox" && b === "list") out({ sandboxes: SANDBOXES });
 else if (a === "sandbox" && b === "get") {
   const s = SANDBOXES.find((x) => x.name === args[2]);

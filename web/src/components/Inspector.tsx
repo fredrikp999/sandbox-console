@@ -4,6 +4,7 @@ import type { NetworkHost, PastSession, ServerMessage } from "../../../shared/pr
 import { type BundleStatus, downloadBundle } from "../bundle.ts";
 import { ago, relPath, sandboxStatus, shortId, tokens } from "../format.ts";
 import { type RequestError, type SessionView, store, useStore } from "../store.ts";
+import { Repos } from "./Repos.tsx";
 import { DeleteSandbox } from "./StartSession.tsx";
 
 const NETWORK_EVERY = 15_000;
@@ -255,6 +256,8 @@ export function Inspector() {
         )}
 
         {view && alive && view.info.canList && <Past key={view.info.sessionId} view={view} />}
+
+        {sb && <Repos sb={sb} />}
 
         <div className="blk">
           <h5>Sandbox</h5>

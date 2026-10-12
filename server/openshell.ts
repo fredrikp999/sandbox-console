@@ -144,6 +144,11 @@ export function execScript(sandbox: string, script: string, args: string[], time
   return run(["sandbox", "exec", sandboxArg(sandbox), "--no-tty", "--no-login-shell", "--", "sh", "-c", script, "sh", ...args], timeoutMs);
 }
 
+/** Upload one local file into a directory in the sandbox (give it with a trailing slash). */
+export function upload(sandbox: string, localFile: string, remoteDir: string) {
+  return runOk(["sandbox", "upload", sandboxArg(sandbox), localFile, remoteDir], 300_000);
+}
+
 export function download(sandbox: string, remotePath: string, localDir: string) {
   return runOk(["sandbox", "download", sandboxArg(sandbox), remotePath, localDir], 300_000);
 }

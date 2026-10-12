@@ -119,6 +119,10 @@ test("sandbox names that aren't in the list never reach the CLI", async () => {
   // Badly shaped messages are refused before anything runs.
   c.send({ type: "open_session", reqId: "d3", sandbox: ["opencode-demo"], agent: "opencode", cwd: "/sandbox" });
   assert.match((await c.next((m) => m.type === "error" && m.reqId === "d3")).message, /Bad message/);
+  c.send({ type: "repo", reqId: "d4", sandbox: "opencode-demo", op: "rm-rf" });
+  assert.match((await c.next((m) => m.type === "error" && m.reqId === "d4")).message, /Unknown repository action/);
+  c.send({ type: "repo", reqId: "d5", sandbox: "opencode-demo", op: "merge", repo: "nope" });
+  assert.match((await c.next((m) => m.type === "error" && m.reqId === "d5")).message, /No repository "nope"/);
   c.send({ type: "no_such_thing" });
   assert.match((await c.next((m) => m.type === "error" && /unknown type/.test(m.message))).message, /no_such_thing/);
   c.ws.close();

@@ -87,9 +87,21 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **Network this session:** from `openshell logs`.
 - **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works.
 - **Earlier threads:** reopen one with `session/load`; it becomes another thread.
+- **Repository:** bring a repo in, get the agent's work out, review and merge it. See below.
 - **Stop the agent process** and **Delete sandbox**.
 
-**Getting code out.** Have the agent commit, then use **Download as git bundle** (or `/bundle <dir>`).
+**Working on a repository.** The **Repository** block in the right column does what openshell-configs' `bundle.sh` does, plus the host side around it.
+- **Bring into sandbox:** give a URL (`git@github.com:you/app.git`, `https://…`) or a path on this machine (`~/code/app`). A URL is cloned here, into `~/sandbox-repos/<name>` unless you choose a directory, with your own git credentials. The base branch (origin's default unless you name one) goes into the sandbox as a git bundle: `/sandbox/<name>`, on branch `agent/<sandbox>`. New sessions in that sandbox start in that directory.
+- **Send latest:** pulls the base branch from origin here (fast-forward only; local commits are never rewritten), then sends it into the sandbox as `host/<base>`. Ask the agent to merge or rebase it.
+- **Get changes:** the commits on `agent/<sandbox>` that aren't in `host/<base>` come out as a bundle and are fetched into your repo as branch `agent/<sandbox>`. The review opens.
+- **Review:** the commits and the diff of each file, `<base>...agent/<sandbox>`.
+- **Merge into `<base>`:** a fast-forward if `<base>` hasn't moved, otherwise a merge commit. If `<base>` is checked out, that work tree must have no uncommitted changes and is updated; if not, only the branch moves. On conflicts nothing changes: send the latest base in and let the agent merge it. After a merge the base is sent into the sandbox again.
+- **Push `<base>` to origin:** a separate button, after the merge.
+- **What the sandbox gets:** only bundles of the base branch. No other branches, no remote, no credentials. Git with credentials runs only on this machine, and never prompts (a prompt would hang): use SSH keys in ssh-agent or a credential helper.
+- **Unlink** forgets the link. No files are deleted.
+
+
+**Getting code out without a linked repository.** Have the agent commit, then use **Download as git bundle** (or `/bundle <dir>`).
 - **What's in it:** the commits on the current branch of the session's directory that aren't in `host/main` or `host/master`. Those branches exist when the repo came in through openshell-configs' `bundle.sh in`; without them, the whole branch.
 - **Taking it into your repo:** `git fetch <file> <branch>:<branch>`, then review before you push.
 
@@ -103,6 +115,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 | `OPENSHELL_CONFIGS` | Your openshell-configs checkout. New sandboxes get its `policies/vscode-terminal.yaml`. Also looked for in `~/openshell-configs/openshell-configs`. |
 | `OPENSHELL_POLICY` | A policy file for new sandboxes, instead of the one above. |
 | `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. Threads (their conversations) are saved in a `threads/` folder next to it. |
+| `CONSOLE_REPOS` | Where repositories given as a URL are cloned. Default `~/sandbox-repos`. |
 | `CONSOLE_TOKEN` | A fixed access token instead of a random one (at least 8 characters of `A-Z a-z 0-9 _ -`). Mainly for scripting and tests. |
 
 ## Security
@@ -141,6 +154,8 @@ server/              the bridge (Node, TypeScript, run with tsx)
   rpc.ts               JSON-RPC over stdio (newline-delimited)
   openshell.ts         CLI wrapper and the `openshell logs` network parser
   bundle.ts            git bundle out of the sandbox (bundle.sh "out")
+  repos.ts             repositories: clone/pull on the host, bundles in and out, review, merge, push
+  threadstore.ts       threads on disk
   validate.ts          shape checks for browser messages, sandbox name rules
   eventlog.ts          keeps the per-session event log bounded without breaking replay
   agents.json          agent registry

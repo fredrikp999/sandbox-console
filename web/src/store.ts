@@ -285,6 +285,7 @@ class Store {
       case "error":
       case "past_sessions":
       case "network":
+      case "repo_result":
         this.settle(m);
         if (m.type === "error" && !m.reqId) {
           const id = m.sessionId;

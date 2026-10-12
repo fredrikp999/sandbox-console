@@ -1188,6 +1188,122 @@ kbd {
   font: 700 18px var(--display);
 }
 
+/* ---------- repositories ---------- */
+.repo {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--sunken);
+}
+.repo-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.repo-head b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repo-head .mono {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.repo-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.repo-out {
+  font-size: 12.5px;
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.repo-out.err {
+  color: var(--bad);
+}
+.repo-out.err .first {
+  font-weight: 600;
+}
+.repo-out .warn-line {
+  color: var(--warn);
+}
+.repo-out .hint {
+  color: var(--fg);
+}
+.modal.review {
+  width: min(1100px, 100%);
+  max-height: calc(100dvh - 32px);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+}
+.review-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.review-head h3 .mono {
+  font-size: 15px;
+}
+.review-body {
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+.rows.commits li > :first-child {
+  white-space: nowrap;
+}
+.review-file {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.review-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: var(--sunken);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.review-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.review-file-head .add {
+  color: var(--ok);
+}
+.review-file-head .del {
+  color: var(--bad);
+}
+.review-file .diff {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  max-height: none;
+}
+.review-acts {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
 .gate {
   margin: auto;
   max-width: 52ch;
