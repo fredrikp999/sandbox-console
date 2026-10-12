@@ -19,7 +19,7 @@ import { Bridge } from "./bridge.ts";
 import { type Bundle, makeBundle } from "./bundle.ts";
 import { ROOT } from "./config.ts";
 import type { CliError } from "./openshell.ts";
-import type { Session } from "./session.ts";
+import type { Thread } from "./session.ts";
 
 const argv = process.argv.slice(2);
 const flag = (name: string) => argv.includes(name);
@@ -103,7 +103,7 @@ const headerSafe = (v: string) => encodeURIComponent(v);
 
 async function serveBundle(url: URL, res: ServerResponse) {
   const sessionId = url.searchParams.get("sessionId") ?? "";
-  let session: Session;
+  let session: Thread;
   try {
     session = bridge.sessionFor(sessionId);
   } catch (e) {

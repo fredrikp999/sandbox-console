@@ -10,7 +10,7 @@ const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   delete_sandbox: { reqId: "s", name: "s" },
   set_sandbox_agent: { name: "s", agent: "s" },
   open_session: { reqId: "s", sandbox: "s", agent: "s", cwd: "s", model: "s?", loadSessionId: "s?" },
-  new_session: { reqId: "s", sessionId: "s" },
+  new_thread: { reqId: "s", sandbox: "s" },
   close_session: { sessionId: "s" },
   list_past_sessions: { reqId: "s", sessionId: "s" },
   prompt: { sessionId: "s", text: "s" },

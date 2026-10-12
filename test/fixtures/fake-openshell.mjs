@@ -82,10 +82,18 @@ function agent() {
     });
   const update = (sessionId, u) => send({ method: "session/update", params: { sessionId, update: u } });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  let model = "openrouter/nvidia/nemotron-3.5-lightning:free";
+  const DEFAULT_MODEL = "openrouter/nvidia/nemotron-3.5-lightning:free";
+  const models_by_session = new Map();
   const models = ["openrouter/nvidia/nemotron-3.5-lightning:free", "openrouter/anthropic/claude-fable-5.1", "openrouter/openrouter/auto"];
-  const config = () => [
-    { id: "model", name: "Model", category: "model", type: "select", currentValue: model, options: models.map((value) => ({ value, name: value })) },
+  const config = (sessionId) => [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: models_by_session.get(sessionId) ?? DEFAULT_MODEL,
+      options: models.map((value) => ({ value, name: value })),
+    },
   ];
 
   async function turn(id, sessionId, text) {
@@ -225,7 +233,7 @@ function agent() {
         });
       case "session/new": {
         const sessionId = `ses_${Math.random().toString(36).slice(2, 10)}`;
-        send({ id: m.id, result: { sessionId, configOptions: config() } });
+        send({ id: m.id, result: { sessionId, configOptions: config(sessionId) } });
         setTimeout(
           () =>
             update(sessionId, {
@@ -242,7 +250,7 @@ function agent() {
       case "session/load":
         update(p.sessionId, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "An earlier question" } });
         update(p.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "An earlier **answer**." } });
-        return send({ id: m.id, result: { configOptions: config() } });
+        return send({ id: m.id, result: { configOptions: config(p.sessionId) } });
       case "session/list":
         return send({
           id: m.id,
@@ -251,8 +259,8 @@ function agent() {
           },
         });
       case "session/set_config_option":
-        model = p.value;
-        return send({ id: m.id, result: { configOptions: config() } });
+        models_by_session.set(p.sessionId, p.value);
+        return send({ id: m.id, result: { configOptions: config(p.sessionId) } });
       case "session/prompt":
         return void turn(m.id, p.sessionId, p.prompt.map((c) => c.text).join(""));
       case "session/cancel":

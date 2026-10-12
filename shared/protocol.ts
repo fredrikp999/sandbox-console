@@ -29,7 +29,9 @@ export interface SandboxRow {
   /** Defaults the console remembers for this sandbox. */
   cwd?: string;
   model?: string;
+  /** The agent process; `state` is the most urgent of its threads. */
   session?: {
+    /** The thread touched last. */
     sessionId: string | null;
     state: ActivityState;
     lastActivity: number;
@@ -53,6 +55,8 @@ export interface SessionInfo {
   canLoad: boolean;
   canList: boolean;
   cwd: string;
+  /** From the agent, else the first prompt; null for an empty thread. */
+  title: string | null;
   configOptions: SessionConfigOption[];
   commands: AvailableCommand[];
   state: ActivityState;
@@ -120,10 +124,12 @@ export type ClientMessage =
       agent: AgentId;
       cwd: string;
       model?: string;
-      /** Load this earlier session (session/load) instead of starting a new one. */
+      /** Load this earlier session (session/load) as a thread instead of starting a new one. */
       loadSessionId?: string;
     }
-  | { type: "new_session"; reqId: string; sessionId: string }
+  /** Another thread in a sandbox whose agent is running. */
+  | { type: "new_thread"; reqId: string; sandbox: string }
+  /** Stops the sandbox's agent process, and with it all its threads. */
   | { type: "close_session"; sessionId: string }
   | { type: "list_past_sessions"; reqId: string; sessionId: string }
   | { type: "prompt"; sessionId: string; text: string }

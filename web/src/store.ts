@@ -24,7 +24,7 @@ export interface State {
   listError?: string;
   gateway: GatewayStatus | null;
   sessions: Record<string, SessionView>;
-  /** Current session per sandbox. */
+  /** The thread shown per sandbox. */
   bySandbox: Record<string, string>;
   selected: string | null;
 }
@@ -146,6 +146,11 @@ class Store {
     this.set({ selected: name });
   }
 
+  /** Show a thread of a sandbox. */
+  activate(sandbox: string, sessionId: string) {
+    this.set((s) => (s.sessions[sessionId] ? { bySandbox: { ...s.bySandbox, [sandbox]: sessionId } } : {}));
+  }
+
   private settle(m: ServerMessage & { reqId?: string }) {
     if (!m.reqId) return;
     const p = this.pending.get(m.reqId);
@@ -156,20 +161,21 @@ class Store {
     else p.resolve(m);
   }
 
-  private track(s: State, info: SessionInfo, reset: boolean): State {
+  /** Add or refresh a thread. `activate` makes it the one shown for its sandbox. */
+  private track(s: State, info: SessionInfo, activate: boolean): State {
     const prev = s.sessions[info.sessionId];
     const sessions = { ...s.sessions };
-    let bySandbox = s.bySandbox;
-    if (!prev || reset) {
-      // A new session for this sandbox replaces the old one.
-      const old = s.bySandbox[info.sandbox];
-      if (old && old !== info.sessionId) delete sessions[old];
+    if (prev) sessions[info.sessionId] = { ...prev, info };
+    else {
+      // A live thread means a fresh agent process: the old, dead one's threads are gone from the bridge.
+      if (info.state !== "dead") {
+        for (const [id, v] of Object.entries(sessions)) if (v.info.sandbox === info.sandbox && v.info.state === "dead") delete sessions[id];
+      }
       sessions[info.sessionId] = { info, conv: emptyConversation(), lastSeq: 0, replayed: false };
-      bySandbox = { ...bySandbox, [info.sandbox]: info.sessionId };
       queueMicrotask(() => this.trySend({ type: "subscribe", sessionId: info.sessionId, sinceSeq: 0 }));
-    } else {
-      sessions[info.sessionId] = { ...prev, info };
     }
+    const current = s.bySandbox[info.sandbox];
+    const bySandbox = activate || !current || !sessions[current] ? { ...s.bySandbox, [info.sandbox]: info.sessionId } : s.bySandbox;
     return { ...s, sessions, bySandbox };
   }
 
@@ -195,7 +201,7 @@ class Store {
           if (known) {
             next.sessions = { ...next.sessions, [info.sessionId]: { ...known, info } };
             queueMicrotask(() => this.trySend({ type: "subscribe", sessionId: info.sessionId, sinceSeq: known.lastSeq }));
-          } else next = this.track(next, info, true);
+          } else next = this.track(next, info, false);
         }
         return next;
       }
@@ -204,9 +210,10 @@ class Store {
       case "gateway":
         return { ...s, gateway: m.gateway };
       case "session_opened": {
+        // Every tab hears about a new thread; only the one that asked switches to it.
+        const mine = !!m.reqId && this.pending.has(m.reqId);
         this.settle(m);
-        const known = s.sessions[m.session.sessionId];
-        return this.track(s, m.session, !known);
+        return this.track(s, m.session, mine);
       }
       case "session_info":
         if (!m.session.sessionId) return s;

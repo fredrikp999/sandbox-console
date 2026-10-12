@@ -1,5 +1,6 @@
-// One agent process per sandbox: `openshell sandbox exec … <agent> acp`,
-// with the current ACP session on it, its event log and pending permissions.
+// One agent process per sandbox: `openshell sandbox exec … <agent> acp`. Several
+// ACP sessions ("threads") share it; each has its own event log, turn and pending
+// permissions.
 import { spawn } from "node:child_process";
 import type {
   AvailableCommand,
@@ -11,6 +12,7 @@ import type {
   RequestPermissionRequest,
   SessionConfigOption,
   SessionNotification,
+  SessionUpdate,
   SetSessionConfigOptionResponse,
   Usage,
 } from "@agentclientprotocol/sdk";
@@ -24,6 +26,9 @@ import { JsonRpcPeer, METHOD_NOT_FOUND, RpcError, TransportClosed } from "./rpc.
 const INIT_TIMEOUT = 60_000;
 const LOAD_TIMEOUT = 180_000;
 const MAX_EVENTS = 20_000;
+/** Updates for a session we have not seen the session/new reply for yet. */
+const MAX_ORPHAN_SESSIONS = 20;
+const TITLE_LENGTH = 80;
 
 /** Distributive Omit, so it keeps each member of the SessionEvent union. */
 type DistOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -35,10 +40,10 @@ interface PendingPermission {
 }
 
 export interface SessionHost {
-  /** Send to every tab subscribed to this session. */
-  publish(session: Session, msg: ServerMessage): void;
+  /** Send to every tab subscribed to this thread. */
+  publish(thread: Thread, msg: ServerMessage): void;
   /** Something visible in the sandbox list changed (state, activity). */
-  changed(session: Session): void;
+  changed(): void;
 }
 
 export function agentCommand(sandbox: string, agent: AgentConfig, cwd: string, model?: string): string[] {
@@ -50,118 +55,33 @@ export function agentCommand(sandbox: string, agent: AgentConfig, cwd: string, m
   return [...args, "--", ...agent.cmd];
 }
 
-export class Session {
-  sessionId: string | null = null;
+/** One ACP session on a sandbox's agent process. */
+export class Thread {
   state: ActivityState = "starting";
+  title: string | null = null;
   lastActivity = Date.now();
   startedAt = Date.now();
-  /** When the agent process started; the network view counts from here. */
-  readonly spawnedAt = Date.now();
-  /** Set when the user closed the session, so its exit isn't reported as a failure. */
-  closedByUser = false;
-  agentInfo: SessionInfo["agentInfo"] = null;
-  canLoad = false;
-  canList = false;
   configOptions: SessionConfigOption[] = [];
   commands: AvailableCommand[] = [];
   usage: SessionInfo["usage"] = undefined;
-  exitCode: number | null = null;
   log: SessionEvent[] = [];
 
   private seq = 0;
-  private peer: JsonRpcPeer;
-  private child;
   private turn: Promise<void> | null = null;
   private permissions = new Map<string, PendingPermission>();
   private nextPermission = 0;
-  private dead = false;
 
   constructor(
-    readonly sandbox: string,
-    readonly agent: AgentConfig,
-    readonly cwd: string,
-    readonly model: string | undefined,
-    private readonly host: SessionHost,
-  ) {
-    this.child = spawn(OPENSHELL, agentCommand(sandbox, agent, cwd, model), { stdio: ["pipe", "pipe", "pipe"] });
-    this.peer = new JsonRpcPeer(
-      this.child,
-      (method, params) => this.onRequest(method, params),
-      (method, params) => this.onNotification(method, params),
-    );
-    this.child.on("error", (e) => this.peer.stderrTail.push(`cannot start ${OPENSHELL}: ${e.message}`));
-    this.child.on("close", (code) => this.onExit(code));
+    readonly proc: Session,
+    readonly sessionId: string,
+  ) {}
+
+  get sandbox() {
+    return this.proc.sandbox;
   }
 
-  // ---- lifecycle
-
-  /** initialize, then session/new or session/load. Rejects with a readable error on failure. */
-  async start(loadSessionId?: string) {
-    try {
-      // No fs or terminal capability: the agent must not touch the host (DESIGN.md section 8).
-      const init = await this.peer.request<InitializeResponse>(
-        "initialize",
-        { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "sandbox-console", version: "0.1.0" } },
-        INIT_TIMEOUT,
-      );
-      this.agentInfo = init.agentInfo ?? null;
-      const caps = init.agentCapabilities ?? {};
-      this.canLoad = !!caps.loadSession;
-      this.canList = !!(caps as { sessionCapabilities?: { list?: unknown } }).sessionCapabilities?.list;
-      await this.begin(loadSessionId);
-    } catch (e) {
-      this.kill();
-      throw await this.describeFailure(e);
-    }
-  }
-
-  /** Start a new ACP session (or load one) on this process. Resets the event log. */
-  async begin(loadSessionId?: string) {
-    if (this.turn) throw new Error("The agent is working. Stop it first (Esc).");
-    this.log = [];
-    this.seq = 0;
-    this.usage = undefined;
-    this.startedAt = Date.now();
-    if (loadSessionId) {
-      if (!this.canLoad) throw new Error(`${this.agent.label} can't load earlier sessions.`);
-      // The agent replays the conversation as session/update notifications.
-      this.sessionId = loadSessionId;
-      const r = await this.peer.request<LoadSessionResponse>(
-        "session/load",
-        { sessionId: loadSessionId, cwd: this.cwd, mcpServers: [] },
-        LOAD_TIMEOUT,
-      );
-      if (r?.configOptions) this.configOptions = r.configOptions;
-    } else {
-      this.sessionId = null;
-      const r = await this.peer.request<NewSessionResponse>("session/new", { cwd: this.cwd, mcpServers: [] }, INIT_TIMEOUT);
-      if (!r?.sessionId) throw new Error("session/new returned no sessionId");
-      this.sessionId = r.sessionId;
-      this.configOptions = r.configOptions ?? [];
-      // Updates that arrived before the reply (e.g. available_commands_update) get the id now.
-      const id = r.sessionId;
-      for (const ev of this.log) ev.sessionId ||= id;
-    }
-    this.setState("idle");
-  }
-
-  close() {
-    this.closedByUser = true;
-    for (const id of [...this.permissions.keys()]) this.answer(id, null);
-    try {
-      this.child.stdin.end();
-    } catch {
-      /* already gone */
-    }
-    setTimeout(() => this.kill(), 3000).unref();
-  }
-
-  private kill() {
-    if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGTERM");
-  }
-
-  get alive() {
-    return !this.dead;
+  get cwd() {
+    return this.proc.cwd;
   }
 
   get busy() {
@@ -170,14 +90,15 @@ export class Session {
 
   info(): SessionInfo {
     return {
-      sessionId: this.sessionId ?? "",
+      sessionId: this.sessionId,
       sandbox: this.sandbox,
-      agent: this.agent.id,
-      agentCmd: this.agent.cmd,
-      agentInfo: this.agentInfo,
-      canLoad: this.canLoad,
-      canList: this.canList,
+      agent: this.proc.agent.id,
+      agentCmd: this.proc.agent.cmd,
+      agentInfo: this.proc.agentInfo,
+      canLoad: this.proc.canLoad,
+      canList: this.proc.canList,
       cwd: this.cwd,
+      title: this.title,
       configOptions: this.configOptions,
       commands: this.commands,
       state: this.state,
@@ -190,16 +111,16 @@ export class Session {
   // ---- what the browser asks for
 
   prompt(text: string) {
-    if (this.dead) throw new Error("The agent process has exited. Start a new session.");
-    if (this.turn) throw new Error("The agent is still working on the last prompt. Wait, or stop it with Esc.");
+    if (this.proc.dead) throw new Error("The agent process has exited. Start a new session.");
+    if (this.turn) throw new Error("The agent is still working on the last prompt in this thread. Wait, or stop it with Esc.");
     const sessionId = this.sessionId;
-    if (!sessionId) throw new Error("The session is still starting.");
+    this.title ||= text.trim().split("\n")[0].slice(0, TITLE_LENGTH) || null;
     this.record({ type: "user_message", text });
     this.record({ type: "turn_start" });
     this.setState("working");
     this.turn = (async () => {
       try {
-        const r = await this.peer.request<PromptResponse>("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+        const r = await this.proc.peer.request<PromptResponse>("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
         const usage: Usage | undefined = r.usage ?? undefined;
         if (usage) this.usage = { ...this.usage, totals: usage };
         this.record({ type: "turn_end", stopReason: r?.stopReason ?? "end_turn", usage });
@@ -214,18 +135,18 @@ export class Session {
         }
       } finally {
         this.turn = null;
-        if (!this.dead) this.setState("idle");
-        this.host.publish(this, { type: "session_info", session: this.info() });
+        if (!this.proc.dead) this.setState("idle");
+        this.proc.host.publish(this, { type: "session_info", session: this.info() });
       }
     })();
   }
 
   cancel() {
-    if (!this.turn || this.dead) return;
-    this.peer.notify("session/cancel", { sessionId: this.sessionId });
+    if (!this.turn || this.proc.dead) return;
+    this.proc.peer.notify("session/cancel", { sessionId: this.sessionId });
     // The spec: on cancel, the client answers open permission requests with "cancelled".
-    for (const id of [...this.permissions.keys()]) this.answer(id, null);
-    this.record({ type: "notice", text: "Stopping the agent…" });
+    this.cancelPermissions();
+    this.notice("Stopping the agent…");
   }
 
   answer(requestId: string, optionId: string | null): boolean {
@@ -243,49 +164,36 @@ export class Session {
     return true;
   }
 
+  cancelPermissions() {
+    for (const id of [...this.permissions.keys()]) this.answer(id, null);
+  }
+
   async setOption(configId: string, value: string) {
-    const r = await this.peer.request<SetSessionConfigOptionResponse>(
+    const r = await this.proc.peer.request<SetSessionConfigOptionResponse>(
       "session/set_config_option",
       { sessionId: this.sessionId, configId, value },
       30_000,
     );
     if (r?.configOptions) this.configOptions = r.configOptions;
     const opt = this.configOptions.find((o) => o.id === configId);
-    this.record({ type: "notice", text: `${opt?.name ?? configId} set to ${value}` });
-    this.host.publish(this, { type: "session_info", session: this.info() });
-  }
-
-  async listPast(): Promise<PastSession[]> {
-    if (!this.canList) return [];
-    const r = await this.peer.request<ListSessionsResponse>("session/list", { cwd: this.cwd }, 30_000);
-    return (r.sessions ?? []).map((s) => ({ sessionId: s.sessionId, title: s.title, updatedAt: s.updatedAt, cwd: s.cwd }));
+    this.notice(`${opt?.name ?? configId} set to ${value}`);
+    this.proc.host.publish(this, { type: "session_info", session: this.info() });
   }
 
   // ---- from the agent
 
-  private async onRequest(method: string, raw: unknown): Promise<unknown> {
-    if (method === "session/request_permission") {
-      const params = raw as Partial<RequestPermissionRequest>;
-      const requestId = String(++this.nextPermission);
-      const options = Array.isArray(params.options) ? params.options : [];
-      if (!options.length) return { outcome: { outcome: "cancelled" } };
-      return new Promise((resolve) => {
-        this.permissions.set(requestId, { options, resolve });
-        this.record({ type: "permission_request", requestId, toolCall: params.toolCall ?? { toolCallId: "" }, options });
-        this.setState("waiting");
-      });
-    }
-    // fs/*, terminal/* and anything else: refused. The agent works only inside its sandbox.
-    this.record({ type: "notice", text: `Refused the agent's request ${method} (the console gives no host access).` });
-    throw new RpcError(method, METHOD_NOT_FOUND, `not supported: ${method}`);
+  requestPermission(params: Partial<RequestPermissionRequest>): Promise<unknown> {
+    const requestId = String(++this.nextPermission);
+    const options = Array.isArray(params.options) ? params.options : [];
+    if (!options.length) return Promise.resolve({ outcome: { outcome: "cancelled" } });
+    return new Promise((resolve) => {
+      this.permissions.set(requestId, { options, resolve });
+      this.record({ type: "permission_request", requestId, toolCall: params.toolCall ?? { toolCallId: "" }, options });
+      this.setState("waiting");
+    });
   }
 
-  private onNotification(method: string, raw: unknown) {
-    if (method !== "session/update") return;
-    const params = raw as Partial<SessionNotification>;
-    if (this.sessionId && params.sessionId && params.sessionId !== this.sessionId) return; // an older session on this process
-    const update = params.update;
-    if (!update) return;
+  onUpdate(update: SessionUpdate) {
     switch (update.sessionUpdate) {
       case "available_commands_update":
         this.commands = update.availableCommands ?? [];
@@ -296,30 +204,230 @@ export class Session {
       case "usage_update":
         this.usage = { ...this.usage, used: update.used, size: update.size };
         break;
+      case "session_info_update":
+        if (update.title !== undefined) {
+          this.title = update.title;
+          this.proc.host.publish(this, { type: "session_info", session: this.info() });
+        }
+        break;
     }
     this.record({ type: "event", update });
+  }
+
+  /** The process exited: answer what was open and, after the stderr reader drained, say so in the log. */
+  exited(code: number | null, stderrTail: string[], hint?: string) {
+    this.state = "dead";
+    this.record({ type: "session_closed", exitCode: code, stderrTail, hint });
+    this.proc.host.publish(this, { type: "session_info", session: this.info() });
+  }
+
+  dropPermissions() {
+    for (const p of this.permissions.values()) p.resolve({ outcome: { outcome: "cancelled" } });
+    this.permissions.clear();
+  }
+
+  notice(text: string) {
+    this.record({ type: "notice", text });
+  }
+
+  // ---- event log
+
+  private record(ev: NewEvent) {
+    const full = { ...ev, sessionId: this.sessionId, seq: ++this.seq, ts: Date.now() } as SessionEvent;
+    this.log.push(full);
+    if (this.log.length > MAX_EVENTS) this.log = bound(this.log, MAX_EVENTS);
+    this.lastActivity = full.ts;
+    this.proc.host.publish(this, full);
+  }
+
+  setState(s: ActivityState) {
+    if (this.state === s) return;
+    this.state = s;
+    this.proc.host.publish(this, { type: "session_info", session: this.info() });
+    this.proc.host.changed();
+  }
+}
+
+/** The agent process of one sandbox, and the threads on it. */
+export class Session {
+  /** When the agent process started; the network view counts from here. */
+  readonly spawnedAt = Date.now();
+  /** Set when the user closed the process, so its exit isn't reported as a failure. */
+  closedByUser = false;
+  agentInfo: SessionInfo["agentInfo"] = null;
+  canLoad = false;
+  canList = false;
+  exitCode: number | null = null;
+  readonly threads = new Map<string, Thread>();
+  dead = false;
+  readonly peer: JsonRpcPeer;
+
+  private child;
+  /** Updates that arrive before the session/new reply that names their session. */
+  private orphans = new Map<string, SessionUpdate[]>();
+  private pastTitles = new Map<string, string>();
+
+  constructor(
+    readonly sandbox: string,
+    readonly agent: AgentConfig,
+    readonly cwd: string,
+    readonly model: string | undefined,
+    readonly host: SessionHost,
+  ) {
+    this.child = spawn(OPENSHELL, agentCommand(sandbox, agent, cwd, model), { stdio: ["pipe", "pipe", "pipe"] });
+    this.peer = new JsonRpcPeer(
+      this.child,
+      (method, params) => this.onRequest(method, params),
+      (method, params) => this.onNotification(method, params),
+    );
+    this.child.on("error", (e) => this.peer.stderrTail.push(`cannot start ${OPENSHELL}: ${e.message}`));
+    this.child.on("close", (code) => this.onExit(code));
+  }
+
+  // ---- lifecycle
+
+  /** initialize, then the first thread (new, or an earlier one loaded). Rejects with a readable error on failure. */
+  async start(loadSessionId?: string): Promise<Thread> {
+    try {
+      // No fs or terminal capability: the agent must not touch the host (DESIGN.md section 8).
+      const init = await this.peer.request<InitializeResponse>(
+        "initialize",
+        { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "sandbox-console", version: "0.1.0" } },
+        INIT_TIMEOUT,
+      );
+      this.agentInfo = init.agentInfo ?? null;
+      const caps = init.agentCapabilities ?? {};
+      this.canLoad = !!caps.loadSession;
+      this.canList = !!(caps as { sessionCapabilities?: { list?: unknown } }).sessionCapabilities?.list;
+      return await this.newThread(loadSessionId);
+    } catch (e) {
+      this.kill();
+      throw await this.describeFailure(e);
+    }
+  }
+
+  /** Another ACP session on this process: a new one, or an earlier one loaded (session/load). */
+  async newThread(loadSessionId?: string): Promise<Thread> {
+    if (this.dead) throw new Error("The agent process has exited. Start a new session.");
+    if (loadSessionId) {
+      const live = this.threads.get(loadSessionId);
+      if (live) return live;
+      if (!this.canLoad) throw new Error(`${this.agent.label} can't load earlier sessions.`);
+      // The agent replays the conversation as session/update notifications.
+      const t = new Thread(this, loadSessionId);
+      t.title = this.pastTitles.get(loadSessionId) ?? null;
+      this.threads.set(loadSessionId, t);
+      try {
+        const r = await this.peer.request<LoadSessionResponse>(
+          "session/load",
+          { sessionId: loadSessionId, cwd: this.cwd, mcpServers: [] },
+          LOAD_TIMEOUT,
+        );
+        if (r?.configOptions) t.configOptions = r.configOptions;
+      } catch (e) {
+        this.threads.delete(loadSessionId);
+        throw e;
+      }
+      t.setState("idle");
+      return t;
+    }
+    const r = await this.peer.request<NewSessionResponse>("session/new", { cwd: this.cwd, mcpServers: [] }, INIT_TIMEOUT);
+    if (!r?.sessionId) throw new Error("session/new returned no sessionId");
+    const t = new Thread(this, r.sessionId);
+    t.configOptions = r.configOptions ?? [];
+    this.threads.set(r.sessionId, t);
+    // Updates that came before the reply (e.g. available_commands_update).
+    for (const u of this.orphans.get(r.sessionId) ?? []) t.onUpdate(u);
+    this.orphans.delete(r.sessionId);
+    t.setState("idle");
+    return t;
+  }
+
+  close() {
+    this.closedByUser = true;
+    for (const t of this.threads.values()) t.cancelPermissions();
+    try {
+      this.child.stdin.end();
+    } catch {
+      /* already gone */
+    }
+    setTimeout(() => this.kill(), 3000).unref();
+  }
+
+  private kill() {
+    if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGTERM");
+  }
+
+  get alive() {
+    return !this.dead;
+  }
+
+  get busy() {
+    return [...this.threads.values()].some((t) => t.busy);
+  }
+
+  /** The thread touched last. */
+  get latest(): Thread | undefined {
+    let best: Thread | undefined;
+    for (const t of this.threads.values()) if (!best || t.lastActivity >= best.lastActivity) best = t;
+    return best;
+  }
+
+  get lastActivity() {
+    return this.latest?.lastActivity ?? this.spawnedAt;
+  }
+
+  /** What the sandbox row shows: whatever needs you most. */
+  get state(): ActivityState {
+    if (this.dead) return "dead";
+    const order: ActivityState[] = ["waiting", "working", "starting", "idle"];
+    const states = [...this.threads.values()].map((t) => t.state);
+    return order.find((s) => states.includes(s)) ?? "starting";
+  }
+
+  async listPast(): Promise<PastSession[]> {
+    if (!this.canList) return [];
+    const r = await this.peer.request<ListSessionsResponse>("session/list", { cwd: this.cwd }, 30_000);
+    const past = (r.sessions ?? []).map((s) => ({ sessionId: s.sessionId, title: s.title, updatedAt: s.updatedAt, cwd: s.cwd }));
+    for (const p of past) if (p.title) this.pastTitles.set(p.sessionId, p.title);
+    return past;
+  }
+
+  // ---- from the agent
+
+  private async onRequest(method: string, raw: unknown): Promise<unknown> {
+    const params = (raw ?? {}) as { sessionId?: string };
+    const thread = params.sessionId ? this.threads.get(params.sessionId) : undefined;
+    if (method === "session/request_permission") {
+      return thread ? thread.requestPermission(raw as Partial<RequestPermissionRequest>) : { outcome: { outcome: "cancelled" } };
+    }
+    // fs/*, terminal/* and anything else: refused. The agent works only inside its sandbox.
+    thread?.notice(`Refused the agent's request ${method} (the console gives no host access).`);
+    throw new RpcError(method, METHOD_NOT_FOUND, `not supported: ${method}`);
+  }
+
+  private onNotification(method: string, raw: unknown) {
+    if (method !== "session/update") return;
+    const params = raw as Partial<SessionNotification>;
+    const update = params.update;
+    if (!update || !params.sessionId) return;
+    const thread = this.threads.get(params.sessionId);
+    if (thread) return thread.onUpdate(update);
+    if (!this.orphans.has(params.sessionId) && this.orphans.size >= MAX_ORPHAN_SESSIONS) return;
+    this.orphans.set(params.sessionId, [...(this.orphans.get(params.sessionId) ?? []), update]);
   }
 
   private onExit(code: number | null) {
     if (this.dead) return;
     this.dead = true;
     this.exitCode = code;
-    for (const p of this.permissions.values()) p.resolve({ outcome: { outcome: "cancelled" } });
-    this.permissions.clear();
+    for (const t of this.threads.values()) t.dropPermissions();
     // Give the stderr reader a moment to drain.
     setTimeout(() => {
-      const tail = [...this.peer.stderrTail];
-      this.state = "dead";
-      if (this.sessionId) {
-        this.record({
-          type: "session_closed",
-          exitCode: code,
-          stderrTail: tail.slice(-15),
-          hint: code === 0 || this.closedByUser ? undefined : exitHint(code, tail, this.agent),
-        });
-      }
-      this.host.publish(this, { type: "session_info", session: this.info() });
-      this.host.changed(this);
+      const tail = [...this.peer.stderrTail].slice(-15);
+      const hint = code === 0 || this.closedByUser ? undefined : exitHint(code, [...this.peer.stderrTail], this.agent);
+      for (const t of this.threads.values()) t.exited(code, tail, hint);
+      this.host.changed();
     }, 150);
   }
 
@@ -337,23 +445,5 @@ export class Session {
       hint = rpcHint(e.message) ?? exitHint(code, tail, this.agent);
     }
     return Object.assign(new Error(message), { detail: tail.join("\n"), hint });
-  }
-
-  // ---- event log
-
-  private record(ev: NewEvent) {
-    const full = { ...ev, sessionId: this.sessionId ?? "", seq: ++this.seq, ts: Date.now() } as SessionEvent;
-    this.log.push(full);
-    if (this.log.length > MAX_EVENTS) this.log = bound(this.log, MAX_EVENTS);
-    this.lastActivity = full.ts;
-    // Without an id yet, tabs get it in the replay after session_opened.
-    if (this.sessionId) this.host.publish(this, full);
-  }
-
-  private setState(s: ActivityState) {
-    if (this.state === s) return;
-    this.state = s;
-    this.host.publish(this, { type: "session_info", session: this.info() });
-    this.host.changed(this);
   }
 }

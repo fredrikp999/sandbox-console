@@ -5,7 +5,7 @@ import type { AgentId, ClientMessage, GatewayStatus, NetworkHost, SandboxRow, Se
 import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
 import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
-import { Session, type SessionHost } from "./session.ts";
+import { Session, type SessionHost, type Thread } from "./session.ts";
 import { NEW_SANDBOX_NAME, parseClientMessage, SANDBOX_NAME } from "./validate.ts";
 
 const LIST_EVERY = 3_000;
@@ -17,7 +17,7 @@ const NETWORK_TTL = 10_000;
 
 interface Tab {
   ws: WebSocket;
-  subs: Set<Session>;
+  subs: Set<Thread>;
 }
 
 export class Bridge implements SessionHost {
@@ -74,7 +74,7 @@ export class Bridge implements SessionHost {
     this.send(tab, {
       type: "hello",
       agents: [...this.agents.values()].map(agentInfo),
-      sessions: [...this.sessions.values()].filter((s) => s.sessionId).map((s) => s.info()),
+      sessions: [...this.sessions.values()].flatMap((s) => [...s.threads.values()].map((t) => t.info())),
       canCreate: true,
       createNote: this.policy ? undefined : "No policies/vscode-terminal.yaml found (set OPENSHELL_CONFIGS); new sandboxes get the default policy.",
     });
@@ -90,9 +90,9 @@ export class Bridge implements SessionHost {
     for (const t of this.tabs) this.send(t, msg);
   }
 
-  publish(session: Session, msg: ServerMessage) {
+  publish(thread: Thread, msg: ServerMessage) {
     const sessionScoped = msg.type !== "session_info";
-    for (const t of this.tabs) if (!sessionScoped || t.subs.has(session)) this.send(t, msg);
+    for (const t of this.tabs) if (!sessionScoped || t.subs.has(thread)) this.send(t, msg);
   }
 
   private lastRows = "";
@@ -106,8 +106,11 @@ export class Bridge implements SessionHost {
     for (const t of this.tabs) if (t.ws.readyState === t.ws.OPEN) t.ws.send(text);
   }
 
-  private bySessionId(id: string): Session {
-    for (const s of this.sessions.values()) if (s.sessionId === id) return s;
+  private bySessionId(id: string): Thread {
+    for (const s of this.sessions.values()) {
+      const t = s.threads.get(id);
+      if (t) return t;
+    }
     throw Object.assign(new Error("That session is no longer open."), { hint: "Start a new session from the sandbox list." });
   }
 
@@ -143,20 +146,21 @@ export class Bridge implements SessionHost {
       }
 
       case "open_session":
-        return this.openSession(tab, msg);
+        return this.openSession(msg);
 
-      case "new_session": {
-        const s = this.bySessionId(msg.sessionId);
-        await s.begin();
-        this.broadcast({ type: "session_opened", reqId: msg.reqId, session: s.info() });
+      case "new_thread": {
+        const proc = this.sessions.get(msg.sandbox);
+        if (!proc?.alive) {
+          throw Object.assign(new Error("The agent isn't running in this sandbox."), { hint: "Start a session from the sandbox list." });
+        }
+        const t = await proc.newThread();
+        this.broadcast({ type: "session_opened", reqId: msg.reqId, session: t.info() });
         return;
       }
 
-      case "close_session": {
-        const s = this.bySessionId(msg.sessionId);
-        s.close();
+      case "close_session":
+        this.bySessionId(msg.sessionId).proc.close();
         return;
-      }
 
       case "prompt":
         this.bySessionId(msg.sessionId).prompt(msg.text);
@@ -181,9 +185,9 @@ export class Bridge implements SessionHost {
       }
 
       case "list_past_sessions": {
-        const s = this.bySessionId(msg.sessionId);
+        const proc = this.bySessionId(msg.sessionId).proc;
         try {
-          const sessions = (await s.listPast()).filter((p) => p.sessionId !== s.sessionId);
+          const sessions = (await proc.listPast()).filter((p) => !proc.threads.has(p.sessionId));
           this.send(tab, { type: "past_sessions", reqId: msg.reqId, sessionId: msg.sessionId, sessions });
         } catch (e) {
           this.send(tab, { type: "past_sessions", reqId: msg.reqId, sessionId: msg.sessionId, sessions: [], error: (e as Error).message });
@@ -194,7 +198,7 @@ export class Bridge implements SessionHost {
       case "network": {
         const s = this.bySessionId(msg.sessionId);
         try {
-          const hosts = await this.networkFor(s);
+          const hosts = await this.networkFor(s.proc);
           this.send(tab, { type: "network", reqId: msg.reqId, sessionId: msg.sessionId, hosts });
         } catch (e) {
           this.send(tab, { type: "network", reqId: msg.reqId, sessionId: msg.sessionId, hosts: [], error: (e as Error).message });
@@ -225,20 +229,16 @@ export class Bridge implements SessionHost {
     }
   }
 
-  private async openSession(tab: Tab, msg: Extract<ClientMessage, { type: "open_session" }>) {
+  private async openSession(msg: Extract<ClientMessage, { type: "open_session" }>) {
     const agent = this.agent(msg.agent);
     const cwd = msg.cwd?.trim() || "/sandbox";
     if (!cwd.startsWith("/")) throw new Error("The working directory must be an absolute path inside the sandbox.");
     const existing = this.sessions.get(msg.sandbox);
 
     if (existing?.alive) {
-      if (msg.loadSessionId) {
-        // Reuse the running agent process: session/load on the same connection.
-        await existing.begin(msg.loadSessionId);
-        this.broadcast({ type: "session_opened", reqId: msg.reqId, session: existing.info() });
-      } else {
-        this.send(tab, { type: "session_opened", reqId: msg.reqId, session: existing.info() });
-      }
+      // Reuse the running agent process. An earlier session is loaded as another thread.
+      const thread = msg.loadSessionId ? await existing.newThread(msg.loadSessionId) : (existing.latest ?? (await existing.newThread()));
+      this.broadcast({ type: "session_opened", reqId: msg.reqId, session: thread.info() });
       return;
     }
 
@@ -254,15 +254,16 @@ export class Bridge implements SessionHost {
     const session = new Session(msg.sandbox, agent, cwd, model, this);
     this.sessions.set(msg.sandbox, session);
     this.changed();
+    let thread: Thread;
     try {
-      await session.start(msg.loadSessionId);
+      thread = await session.start(msg.loadSessionId);
     } catch (e) {
       if (this.sessions.get(msg.sandbox) === session) this.sessions.delete(msg.sandbox);
       this.changed();
       throw e;
     }
     this.state.set(msg.sandbox, { agent: agent.id, cwd });
-    this.broadcast({ type: "session_opened", reqId: msg.reqId, session: session.info() });
+    this.broadcast({ type: "session_opened", reqId: msg.reqId, session: thread.info() });
     this.changed();
   }
 
@@ -375,7 +376,7 @@ export class Bridge implements SessionHost {
         cwd: remembered.cwd,
         model: remembered.model,
         session: session && {
-          sessionId: session.sessionId,
+          sessionId: session.latest?.sessionId ?? null,
           state: session.state,
           lastActivity: session.lastActivity,
           agent: session.agent.id,

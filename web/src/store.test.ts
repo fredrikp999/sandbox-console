@@ -110,6 +110,33 @@ test("after a reconnect it resumes from its last seq and ignores replayed duplic
   assert.equal(agentText(), "Hello!");
 });
 
+test("threads: the tab that asks for one switches to it, others just list it", async () => {
+  const b = FakeWS.all[1];
+  const pending = store.request({ type: "new_thread", sandbox: "c1" });
+  const reqId = b.sent.at(-1).reqId;
+  b.recv({ type: "session_opened", reqId, session: { ...info, sessionId: "s2", startedAt: 2 } });
+  await pending;
+  await tick();
+  assert.equal(store.state.bySandbox.c1, "s2");
+  assert.deepEqual(b.sent.at(-1), { type: "subscribe", sessionId: "s2", sinceSeq: 0 });
+
+  // Opened from another tab: listed, but this tab stays where it is.
+  b.recv({ type: "session_opened", session: { ...info, sessionId: "s3", startedAt: 3 } });
+  await tick();
+  assert.ok(store.state.sessions.s3);
+  assert.equal(store.state.bySandbox.c1, "s2");
+
+  store.activate("c1", "s1");
+  assert.equal(store.state.bySandbox.c1, "s1");
+
+  // The agent exits, then a new process starts: the dead process's threads are dropped.
+  for (const id of ["s1", "s2", "s3"]) b.recv({ type: "session_info", session: { ...info, sessionId: id, state: "dead" } });
+  b.recv({ type: "session_opened", session: { ...info, sessionId: "s4", startedAt: 4 } });
+  await tick();
+  assert.deepEqual(Object.keys(store.state.sessions), ["s4"]);
+  assert.equal(store.state.bySandbox.c1, "s4");
+});
+
 test("a refused connection with a wrong token shows the access-link page", async () => {
   pingStatus = 401;
   const b = FakeWS.all[1];

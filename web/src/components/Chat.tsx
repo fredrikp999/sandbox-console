@@ -8,6 +8,7 @@ import { Composer, type ConsoleCommand } from "./Composer.tsx";
 import { ConversationLog } from "./ConversationLog.tsx";
 import { flattenOptions, ModelPicker, type PickerHandle } from "./ModelPicker.tsx";
 import { StartSession } from "./StartSession.tsx";
+import { Threads } from "./Threads.tsx";
 
 function ConfigControls({
   view,
@@ -119,13 +120,14 @@ export function Chat() {
         run: (dir) => sessionId && downloadBundle(sessionId, dir || undefined, setFlash),
       },
       {
-        name: "clear",
-        hint: "start a new session in this sandbox",
+        name: "new",
+        hint: "start another thread in this sandbox",
         run: () =>
-          sessionId && store.request({ type: "new_session", sessionId }).catch((e: RequestError) => setFlash({ tone: "error", text: e.message })),
+          selected &&
+          store.request({ type: "new_thread", sandbox: selected }).catch((e: RequestError) => setFlash({ tone: "error", text: e.message })),
       },
     ],
-    [sessionId, setFlash],
+    [sessionId, selected, setFlash],
   );
 
   if (!selected) {
@@ -182,6 +184,7 @@ export function Chat() {
         </div>
         {view && !dead && <ConfigControls view={view} picker={picker} onError={(text) => setFlash({ tone: "error", text })} />}
       </div>
+      {view && <Threads sandbox={selected} onError={(text) => setFlash({ tone: "error", text })} />}
       <div
         className="log"
         ref={log}
@@ -195,7 +198,7 @@ export function Chat() {
           <>
             {!view.conv.items.length && view.replayed && !dead && (
               <div className="empty">
-                <b>Session ready</b>
+                <b>New thread</b>
                 <span>
                   {info?.agentInfo?.name ?? "The agent"} is running in <span className="mono">{selected}</span>. Ask it something, or type{" "}
                   <kbd>/</kbd> for commands.

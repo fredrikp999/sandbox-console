@@ -6,7 +6,7 @@ A local web app for the coding agents in your [OpenShell](https://github.com/NVI
 - **Chat:** streamed replies, the agent's plan, its thinking, and a card for each tool call, with diffs for edits.
 - **Approvals:** permission requests appear as cards. You answer with the agent's own options, each labelled with what it actually does.
 - **Models and commands:** a searchable model picker (OpenRouter offers about 400 models) and a `/` menu with the agent's commands.
-- **Sessions keep running** when you close the tab, and the conversation is replayed when you come back. Earlier sessions can be reopened.
+- **Sessions keep running** when you close the tab, and the conversation is replayed when you come back. A sandbox can have several threads (conversations) side by side; switch between them or start a new one. Earlier threads can be reopened.
 - **Review:** files changed, hosts the sandbox reached or was denied, and the agent's commits downloaded as a git bundle.
 
 The design is in [docs/DESIGN.md](docs/DESIGN.md), and [docs/mockup.html](docs/mockup.html) is a clickable mockup.
@@ -74,7 +74,7 @@ The `/` menu has the agent's own commands (OpenCode: `/init`, `/review`, …) an
 |---|---|
 | `/model [search]` | switch model for this session |
 | `/bundle [dir]` | download the agent's commits as a git bundle |
-| `/clear` | start a new session in this sandbox |
+| `/new` | start another thread in this sandbox |
 
 Anything else starting with `/` isn't sent, because it would reach the model as plain text. Start with a space to send it anyway.
 
@@ -85,7 +85,8 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **Files changed:** click a file to jump to its edit.
 - **Download as git bundle:** see below.
 - **Network this session:** from `openshell logs`.
-- **Earlier sessions:** reopen one with `session/load`.
+- **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works.
+- **Earlier threads:** reopen one with `session/load`; it becomes another thread.
 - **Stop the agent process** and **Delete sandbox**.
 
 **Getting code out.** Have the agent commit, then use **Download as git bundle** (or `/bundle <dir>`).
@@ -164,7 +165,7 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
   - The user's own prompts are logged too, because ACP doesn't echo them.
   - Errors that belong in the conversation are `session_error`, so they can't be confused with replies to requests (`error` with a `reqId`).
 - **The ACP transport is our own small JSON-RPC peer** (`server/rpc.ts`, ported from `acp_client.py`). `@agentclientprotocol/sdk` is used for types only. Its connection class answers `fs/*` requests through optional handlers instead of returning `-32601`, sends a parse error back to the agent for non-JSON lines on stdout, and validates payloads against its schema. The bridge should relay payloads as the agent sends them and refuse host access explicitly.
-- **One agent process per sandbox.** `/clear` runs `session/new` and "Earlier sessions" runs `session/load` on the same process.
+- **One agent process per sandbox.** Threads are ACP sessions on that one process: "New thread" (`/new`) runs `session/new` and "Earlier threads" runs `session/load`.
 - **Agent detection** (open question: does `sandbox get` show the image?). It doesn't, but its policy lists the provider (`_provider_openrouter` means OpenCode). After that the console falls back to the name prefix, then to what you chose before.
 - **Network view** (open question: are denials in `openshell logs`?). They are. `NET:OPEN … ALLOWED|DENIED <binary> -> host:port` lines are counted from the time the agent process started, and refreshed every 15 s.
 - **Token usage:** OpenCode sends `usage_update` (context used and size), and the `session/prompt` result includes cumulative `usage`. Both are shown.
@@ -172,7 +173,7 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
 - **The diff view** is a small jsdiff-based component instead of `react-diff-view`.
 
 ## Limitations
-- **Sessions are kept in memory.** They survive closing the tab, not restarting the bridge. Use "Earlier sessions" to get back to them.
+- **Sessions are kept in memory.** They survive closing the tab, not restarting the bridge. Use "Earlier threads" to get back to them.
 - **Long-running sessions** (hours, gateway restarts) are untested. When the agent process dies, the console shows its exit code and last output, and offers to start a new session.
 
 ## License

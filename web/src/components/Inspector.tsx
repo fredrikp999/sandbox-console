@@ -88,10 +88,10 @@ function Past({ view }: { view: SessionView }) {
   };
   return (
     <div className="blk">
-      <h5>Earlier sessions</h5>
+      <h5>Earlier threads</h5>
       {!list && (
         <button type="button" className="btn small" style={{ justifySelf: "start" }} onClick={show}>
-          Show earlier sessions
+          Show earlier threads
         </button>
       )}
       {list && !list.length && <p className="muted">None in {view.info.cwd}.</p>}

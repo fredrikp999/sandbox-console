@@ -120,7 +120,7 @@ Three columns. Narrow screens hide the right column. Phone width stacks everythi
 - **Composer:** a multi-line box with a Send button. **Enter** sends, **Shift+Enter** adds a new line, **Esc** stops the agent.
 - **Slash menu:** typing `/` opens it, grouped into:
   - **Agent** commands from `available_commands_update`, sent as prompts;
-  - **Console** commands handled locally: `/model`, `/bundle`, `/clear` (new session).
+  - **Console** commands handled locally: `/model`, `/bundle`, `/new` (another thread).
 
   Unknown `/words` are not sent silently. The UI says they aren't commands.
 

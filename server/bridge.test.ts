@@ -219,3 +219,68 @@ test("git bundle download: success, branch names that aren't Latin-1, and errors
   const relative = await fetch(`${BASE}/api/bundle?sessionId=${sid}&dir=--upload-pack=x`, { headers: AUTH });
   assert.equal(relative.status, 400);
 });
+
+test("a sandbox can have several threads that run independently", async () => {
+  const c = connect();
+  await c.opened;
+  const hello = await c.next((m) => m.type === "hello");
+  const firstInfo = hello.sessions.find((s: any) => s.sandbox === "opencode-demo");
+  const first = firstInfo.sessionId;
+  const firstModel = firstInfo.configOptions[0].currentValue;
+  assert.notEqual(firstModel, "openrouter/anthropic/claude-fable-5.1");
+
+  c.send({ type: "new_thread", reqId: "t1", sandbox: "opencode-demo" });
+  const second = (await c.next((m) => m.type === "session_opened" && m.reqId === "t1")).session;
+  assert.notEqual(second.sessionId, first);
+  assert.equal(second.sandbox, "opencode-demo");
+  assert.equal(second.title, null);
+
+  // A turn in the new thread shows up only in its own log, and names the thread after the prompt.
+  c.send({ type: "subscribe", sessionId: second.sessionId, sinceSeq: 0 });
+  c.send({ type: "prompt", sessionId: second.sessionId, text: "second thread question" });
+  const perm = await c.next((m) => m.type === "permission_request" && m.sessionId === second.sessionId);
+  const titled = await c.next((m) => m.type === "session_info" && m.session.sessionId === second.sessionId && m.session.title);
+  assert.equal(titled.session.title, "second thread question");
+  c.send({ type: "permission_answer", sessionId: second.sessionId, requestId: perm.requestId, optionId: "once" });
+  await c.next((m) => m.type === "turn_end" && m.sessionId === second.sessionId);
+
+  // Settings are per thread.
+  c.send({ type: "set_option", reqId: "m2", sessionId: second.sessionId, configId: "model", value: "openrouter/anthropic/claude-fable-5.1" });
+  await c.next((m) => m.type === "result" && m.reqId === "m2");
+  const d = connect();
+  await d.opened;
+  const again = await d.next((m) => m.type === "hello");
+  const mine = again.sessions.filter((s: any) => s.sandbox === "opencode-demo");
+  assert.deepEqual(
+    mine.map((s: any) => s.sessionId),
+    [first, second.sessionId],
+  );
+  assert.equal(mine[1].configOptions[0].currentValue, "openrouter/anthropic/claude-fable-5.1");
+  assert.equal(mine[0].configOptions[0].currentValue, firstModel);
+
+  // An earlier session is loaded as one more thread; the live ones aren't offered again.
+  c.send({ type: "list_past_sessions", reqId: "p1", sessionId: second.sessionId });
+  const past = await c.next((m) => m.type === "past_sessions" && m.reqId === "p1");
+  assert.deepEqual(
+    past.sessions.map((p: any) => p.sessionId),
+    ["ses_old1"],
+  );
+  c.send({ type: "open_session", reqId: "l1", sandbox: "opencode-demo", agent: "opencode", cwd: "/sandbox/myrepo", loadSessionId: "ses_old1" });
+  const loaded = (await c.next((m) => m.type === "session_opened" && m.reqId === "l1")).session;
+  assert.equal(loaded.sessionId, "ses_old1");
+  assert.equal(loaded.title, "Add a health endpoint");
+  c.send({ type: "subscribe", sessionId: "ses_old1", sinceSeq: 0 });
+  await c.next((m) => m.type === "replay_done" && m.sessionId === "ses_old1");
+  assert.ok(c.inbox.some((m) => m.sessionId === "ses_old1" && m.type === "event" && m.update.sessionUpdate === "agent_message_chunk"));
+
+  // The sandbox row shows the most urgent thread, and the thread that was touched last.
+  const rows = await c.next(
+    (m) => m.type === "sandboxes" && m.sandboxes.find((s: any) => s.name === "opencode-demo")?.session?.sessionId === "ses_old1",
+  );
+  assert.ok(rows);
+
+  c.send({ type: "new_thread", reqId: "t2", sandbox: "claude-demo" });
+  assert.match((await c.next((m) => m.type === "error" && m.reqId === "t2")).message, /isn't running/);
+  c.ws.close();
+  d.ws.close();
+});
