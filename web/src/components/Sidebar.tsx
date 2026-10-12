@@ -1,7 +1,7 @@
 // Left column: gateway line, sandbox rows with status, "New sandbox".
 import { useEffect, useMemo, useState } from "react";
-import type { ActivityState } from "../../../shared/protocol.ts";
-import { dotClass, sandboxStatus } from "../format.ts";
+import type { ActivityState, PastSession, ServerMessage } from "../../../shared/protocol.ts";
+import { ago, dotClass, sandboxStatus, shortId } from "../format.ts";
 import { type RequestError, store, useStore } from "../store.ts";
 import { NewSandbox } from "./NewSandbox.tsx";
 
@@ -14,6 +14,69 @@ const DOT: Record<ActivityState, string> = {
 };
 
 const ALL = "*all";
+
+/** The agent's own earlier sessions (session/list) in this sandbox's directory; loading one makes it a thread. */
+function EarlierFromAgent({ sandbox }: { sandbox: string }) {
+  // Any live thread can ask: they share the agent process.
+  const live = useStore((s) => Object.values(s.sessions).find((v) => v.info.sandbox === sandbox && v.info.state !== "dead" && v.info.canList));
+  const [list, setList] = useState<PastSession[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  if (!live) return null;
+  const info = live.info;
+
+  const show = async () => {
+    setError(null);
+    try {
+      const r = await store.request<Extract<ServerMessage, { type: "past_sessions" }>>({ type: "list_past_sessions", sessionId: info.sessionId });
+      setList(r.sessions);
+      if (r.error) setError(r.error);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const open = async (id: string) => {
+    setBusy(id);
+    try {
+      await store.request({ type: "open_session", sandbox, agent: info.agent, cwd: info.cwd, loadSessionId: id });
+      setList((l) => l?.filter((p) => p.sessionId !== id) ?? null);
+    } catch (e) {
+      setError((e as RequestError).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <>
+      {!list ? (
+        <button type="button" className="sb-thread-all" onClick={show} title={`Sessions the agent keeps for ${info.cwd}`}>
+          Earlier from the agent…
+        </button>
+      ) : (
+        <>
+          <div className="sb-threads-label">From the agent{list.length ? "" : ": none"}</div>
+          {list.slice(0, 30).map((p) => (
+            <div key={p.sessionId} className="sb-thread">
+              <button
+                type="button"
+                className="sb-thread-open"
+                disabled={!!busy}
+                onClick={() => open(p.sessionId)}
+                title={`Load ${p.sessionId} as a thread`}
+              >
+                <span className="dot idle" />
+                <span className="sb-thread-title">{p.title || shortId(p.sessionId)}</span>
+                <span className="sb-thread-hint">{busy === p.sessionId ? "loading…" : p.updatedAt ? ago(Date.parse(p.updatedAt)) : "load"}</span>
+              </button>
+            </div>
+          ))}
+        </>
+      )}
+      {error && <div className="form-error">{error}</div>}
+    </>
+  );
+}
 
 /** The threads of the selected sandbox: open one in a tab, or delete it for good. */
 function SandboxThreads({ sandbox }: { sandbox: string }) {
@@ -30,7 +93,13 @@ function SandboxThreads({ sandbox }: { sandbox: string }) {
         .sort((a, b) => b.info.startedAt - a.info.startedAt),
     [sessions, sandbox],
   );
-  if (!threads.length) return null;
+  if (!threads.length) {
+    return (
+      <div className="sb-threads">
+        <EarlierFromAgent sandbox={sandbox} />
+      </div>
+    );
+  }
 
   const remove = async (target: string) => {
     if (armed !== target) return setArmed(target);
@@ -85,6 +154,7 @@ function SandboxThreads({ sandbox }: { sandbox: string }) {
           {armed === ALL ? `Delete all ${threads.length}?` : "Delete all threads"}
         </button>
       )}
+      <EarlierFromAgent sandbox={sandbox} />
       {error && <div className="form-error">{error}</div>}
     </div>
   );

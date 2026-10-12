@@ -59,6 +59,7 @@ export interface RepoLink {
   sentAt?: number;
   fetchedAt?: number;
   mergedAt?: number;
+  pushedAt?: number;
 }
 
 export interface RepoCommit {

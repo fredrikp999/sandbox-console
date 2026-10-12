@@ -80,23 +80,19 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 
 **Permission cards.** When the agent asks before acting, answer with one of its options. Each button also shows what it does ("allows once", "allows always", "rejects"), because the label is the agent's own text. Stop (<kbd>Esc</kbd>) answers an open request with "cancelled".
 
-**Session (right).**
-- **Details:** the agent command, directory, session id and token usage.
-- **Files changed:** click a file to jump to its edit.
-- **Download as git bundle:** see below.
-- **Network this session:** from `openshell logs`.
-- **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works.
-- **Earlier threads:** reopen one with `session/load`; it becomes another thread.
-- **Repository:** bring a repo in, get the agent's work out, review and merge it. See below.
-- **Open in VS Code** (or Cursor): opens a folder of the sandbox (a linked repository, or the session's directory) in a Remote-SSH window. See below.
-- **Stop the agent process** and **Delete sandbox**.
+**Where things are.** The header is about the sandbox, the tabs and conversation about a thread, the right column about the code.
+- **Header:** the sandbox name; agent, directory and context used (hover for the agent command, session id and token totals); the model; **Open in VS Code** (▾ picks the folder, or Cursor; see below); and **⋯** with **Stop the agent** and **Delete sandbox**.
+- **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works. × closes a tab; the thread stays in the sidebar.
+- **Sidebar:** under the selected sandbox, all its threads (open one, or delete it), and **Earlier from the agent…**: sessions the agent itself keeps, loaded with `session/load` as another thread.
+- **Changes** (right): the repository as four steps (in the sandbox, the agent's work, review, on origin), with the next one highlighted; see below. Under it, the files this thread edited (click one to jump to the edit).
+- **Activity** (right): network this session, from `openshell logs` (the tab shows how many hosts were denied), and what the agent was always allowed.
 
 **VS Code.** Needs the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension and the `code` command (in VS Code: *Shell Command: Install 'code' command in PATH*; the console also looks in `/Applications`).
 - **How it connects:** over SSH through the gateway (`openshell ssh-proxy`); the sandbox exposes no port. The host entry `openshell-<sandbox>.default` lives in `~/.config/openshell/ssh_config`, which OpenShell includes from `~/.ssh/config`. The console adds a missing entry there; on a machine where that was never set up, it lets `openshell sandbox connect --editor vscode` do it the first time.
 - **VS Code Server:** the sandbox can't download it, so VS Code needs `"remote.SSH.localServerDownload": "always"`. The console tells you when it's missing and can add it.
 - **Terminal:** the sandbox needs the terminal policy (`policies/vscode-terminal.yaml`, which "New sandbox" uses); the console warns when it's missing.
 
-**Working on a repository.** The **Repository** block in the right column does what openshell-configs' `bundle.sh` does, plus the host side around it.
+**Working on a repository.** The **Changes** tab does what openshell-configs' `bundle.sh` does, plus the host side around it.
 - **Bring into sandbox:** give a URL (`git@github.com:you/app.git`, `https://…`) or a path on this machine (`~/code/app`). A URL is cloned here, into `~/sandbox-repos/<name>` unless you choose a directory, with your own git credentials. The base branch (origin's default unless you name one) goes into the sandbox as a git bundle: `/sandbox/<name>`, on branch `agent/<sandbox>`. New sessions in that sandbox start in that directory.
 - **Send latest:** pulls the base branch from origin here (fast-forward only; local commits are never rewritten), then sends it into the sandbox as `host/<base>`. Ask the agent to merge or rebase it.
 - **Get changes:** the commits on `agent/<sandbox>` that aren't in `host/<base>` come out as a bundle and are fetched into your repo as branch `agent/<sandbox>`. The review opens.
@@ -107,7 +103,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **Unlink** forgets the link. No files are deleted.
 
 
-**Getting code out without a linked repository.** Have the agent commit, then use **Download as git bundle** (or `/bundle <dir>`).
+**Getting code out without a linked repository.** Have the agent commit, then use "download the agent's commits as a git bundle" in the Changes tab (or `/bundle <dir>`).
 - **What's in it:** the commits on the current branch of the session's directory that aren't in `host/main` or `host/master`. Those branches exist when the repo came in through openshell-configs' `bundle.sh in`; without them, the whole branch.
 - **Taking it into your repo:** `git fetch <file> <branch>:<branch>`, then review before you push.
 
@@ -188,7 +184,7 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
   - The user's own prompts are logged too, because ACP doesn't echo them.
   - Errors that belong in the conversation are `session_error`, so they can't be confused with replies to requests (`error` with a `reqId`).
 - **The ACP transport is our own small JSON-RPC peer** (`server/rpc.ts`, ported from `acp_client.py`). `@agentclientprotocol/sdk` is used for types only. Its connection class answers `fs/*` requests through optional handlers instead of returning `-32601`, sends a parse error back to the agent for non-JSON lines on stdout, and validates payloads against its schema. The bridge should relay payloads as the agent sends them and refuse host access explicitly.
-- **One agent process per sandbox.** Threads are ACP sessions on that one process: "New thread" (`/new`) runs `session/new` and "Earlier threads" runs `session/load`.
+- **One agent process per sandbox.** Threads are ACP sessions on that one process: "New thread" (`/new`) runs `session/new`; resuming a thread and "Earlier from the agent" run `session/load`.
 - **Agent detection** (open question: does `sandbox get` show the image?). It doesn't, but its policy lists the provider (`_provider_openrouter` means OpenCode). After that the console falls back to the name prefix, then to what you chose before.
 - **Network view** (open question: are denials in `openshell logs`?). They are. `NET:OPEN … ALLOWED|DENIED <binary> -> host:port` lines are counted from the time the agent process started, and refreshed every 15 s.
 - **Token usage:** OpenCode sends `usage_update` (context used and size), and the `session/prompt` result includes cumulative `usage`. Both are shown.
@@ -196,7 +192,7 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
 - **The diff view** is a small jsdiff-based component instead of `react-diff-view`.
 
 ## Limitations
-- **Sessions are kept in memory.** They survive closing the tab, not restarting the bridge. Use "Earlier threads" to get back to them.
+- **Threads are saved on disk** and come back after a restart of the bridge, as exited threads you can resume (if the agent supports `session/load`).
 - **Long-running sessions** (hours, gateway restarts) are untested. When the agent process dies, the console shows its exit code and last output, and offers to start a new session.
 
 ## License

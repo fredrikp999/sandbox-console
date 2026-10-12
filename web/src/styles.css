@@ -102,7 +102,7 @@ button {
 /* ---------- app frame ---------- */
 .app {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr) 284px;
+  grid-template-columns: 248px minmax(0, 1fr) 320px;
   height: 100vh;
   /* biome-ignore lint/suspicious/noDuplicateProperties: 100vh above is the fallback where dvh isn't supported */
   height: 100dvh;
@@ -1188,34 +1188,239 @@ kbd {
   font: 700 18px var(--display);
 }
 
-/* ---------- repositories ---------- */
-.repo {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--sunken);
+/* ---------- inspector tabs ---------- */
+.pane-head.tabs {
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 0 12px;
 }
-.repo-head {
+.itab {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
+  padding: 13px 8px 11px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: 600 13px var(--body);
+  cursor: pointer;
+}
+.itab:hover {
+  color: var(--fg);
+}
+.itab[aria-selected="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+.badge {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+.badge.bad {
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+.muted.pad {
+  padding: 16px;
+}
+button.linklike {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+button.linklike:hover:not(:disabled) {
+  text-decoration: underline;
+}
+button.linklike.danger {
+  color: var(--muted);
+}
+button.linklike.danger:hover,
+button.linklike.danger.armed {
+  color: var(--bad);
+}
+
+/* ---------- repositories ---------- */
+.repo-name {
+  font: 600 13px var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--fg);
+}
+select.repo-pick {
+  text-transform: none;
+}
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 8px 8px;
+  border-radius: 9px;
+}
+.step.next {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.step-n {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font: 600 11.5px var(--mono);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.step.next .step-n {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+.step-text {
+  display: grid;
   min-width: 0;
 }
-.repo-head b {
+.step-text b {
+  font-size: 13px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.repo-head .mono {
-  font-size: 11.5px;
+.step-text span {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.repo-acts {
+.step .btn {
+  white-space: nowrap;
+}
+.repo-foot {
   display: flex;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  padding: 0 8px;
+  min-width: 0;
+}
+.repo-foot .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* ---------- header actions and popovers ---------- */
+.sb-actions {
+  display: flex;
+  align-items: center;
   gap: 6px;
+}
+.split {
+  display: flex;
+}
+.split .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.split .btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 0;
+  padding-left: 7px;
+  padding-right: 7px;
+}
+.pop-anchor {
+  position: relative;
+}
+.pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+.pop-sec {
+  display: grid;
+  gap: 4px;
+}
+.pop-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pop-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  min-width: 0;
+}
+.pop-choice .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pop-acts {
+  display: flex;
+  justify-content: flex-end;
+}
+.pop-menu {
+  display: grid;
+  margin: -6px;
+}
+.pop:has(.pop-menu) {
+  width: 240px;
+}
+.pop-item {
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.pop-item:hover:not(:disabled) {
+  background: var(--sunken);
+}
+.pop-item.danger {
+  color: var(--bad);
+}
+.pop-item.danger.armed {
+  background: var(--bad-soft);
+  font-weight: 600;
 }
 .repo-out {
   font-size: 12.5px;
@@ -1236,14 +1441,6 @@ kbd {
 }
 .repo-out .hint {
   color: var(--fg);
-}
-.editor-open {
-  display: grid;
-  gap: 8px;
-}
-.editor-open select.opt {
-  justify-self: start;
-  max-width: 100%;
 }
 .modal.review {
   width: min(1100px, 100%);
@@ -1267,6 +1464,7 @@ kbd {
 }
 .rows.commits li > :first-child {
   white-space: nowrap;
+  direction: ltr;
 }
 .review-file {
   border: 1px solid var(--line);
@@ -1442,6 +1640,11 @@ kbd {
 .sb-thread .thread-x:focus-visible,
 .sb-thread .thread-x.armed {
   opacity: 1;
+}
+.sb-threads-label {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 6px 6px 2px;
 }
 .sb-thread-all {
   justify-self: start;

@@ -1,11 +1,11 @@
-// "Repository" block of the inspector: bring a host repo (or a clone of a remote
+// "Changes" tab of the inspector: bring a host repo (or a clone of a remote
 // one) into the sandbox, send it the latest base branch, get the agent's commits
 // out, review them, merge into base and push. Git with credentials only runs on
 // this machine; the sandbox only ever sees bundles.
 import { useEffect, useState } from "react";
 import type { RepoLink, RepoOp, RepoReview, SandboxRow, ServerMessage } from "../../../shared/protocol.ts";
 import { ago } from "../format.ts";
-import { type RequestError, store } from "../store.ts";
+import { type RequestError, store, useStore } from "../store.ts";
 
 type RepoResult = Extract<ServerMessage, { type: "repo_result" }>;
 type Outcome = { tone: "ok" | "error"; lines: string[]; hint?: string };
@@ -41,16 +41,29 @@ function useRepoActions(sandbox: string) {
       setBusy(null);
     }
   };
-  return { busy, outcome, setOutcome, reviews, run };
+  return { busy, outcome, reviews, setReviews, run };
 }
 
 export function Repos({ sb }: { sb: SandboxRow }) {
-  const { busy, outcome, reviews, run } = useRepoActions(sb.name);
+  const { busy, outcome, reviews, setReviews, run } = useRepoActions(sb.name);
   const [adding, setAdding] = useState(false);
+  const [current, setCurrent] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
   const ready = sb.phase === "Ready";
-  const showForm = adding || sb.repos.length === 0;
+  const repo = sb.repos.find((r) => r.name === current) ?? sb.repos[0];
   const reviewed = sb.repos.find((r) => r.name === reviewing);
+
+  // Load the review quietly, so step 3 can say what is waiting.
+  const name = repo?.name;
+  const connected = useStore((s) => s.link === "open");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reload when something came out or was merged.
+  useEffect(() => {
+    if (!name || !connected) return;
+    store
+      .request<RepoResult>({ type: "repo", sandbox: sb.name, op: "review", repo: name })
+      .then((r) => r.review && setReviews((v) => ({ ...v, [name]: r.review as RepoReview })))
+      .catch(() => {});
+  }, [sb.name, name, connected, repo?.fetchedAt, repo?.mergedAt, setReviews]);
 
   const getChanges = async (r: RepoLink) => {
     const res = await run("get", r.name);
@@ -60,42 +73,71 @@ export function Repos({ sb }: { sb: SandboxRow }) {
     if (await run("review", r.name)) setReviewing(r.name);
   };
 
-  return (
-    <div className="blk">
-      <h5>Repository</h5>
-      {sb.repos.map((r) => (
-        <RepoCard
-          key={r.name}
-          repo={r}
-          ready={ready}
-          disabled={!!busy}
-          working={busy?.repo === r.name && !reviewing ? BUSY[busy.op] : null}
-          onSend={() => run("send", r.name)}
-          onGet={() => getChanges(r)}
-          onReview={() => openReview(r)}
-          onUnlink={() => run("unlink", r.name)}
-        />
-      ))}
-      {showForm ? (
-        ready ? (
+  if (!repo || adding) {
+    return (
+      <div className="blk">
+        <h5>{repo ? "Add a repository" : "Work on a repository"}</h5>
+        {ready ? (
           <LinkForm
             busy={busy?.op === "link"}
             disabled={!!busy}
-            canCancel={sb.repos.length > 0}
+            canCancel={!!repo}
             onCancel={() => setAdding(false)}
             onSubmit={async (v) => {
-              if (await run("link", null, v)) setAdding(false);
+              const r = await run("link", null, v);
+              if (r) {
+                setAdding(false);
+                setCurrent(r.repo);
+              }
             }}
           />
         ) : (
           <p className="muted">The sandbox must be Ready to bring a repository in.</p>
-        )
-      ) : (
-        <button type="button" className="btn small" style={{ justifySelf: "start" }} onClick={() => setAdding(true)} disabled={!!busy}>
-          + Another repository
+        )}
+        {outcome && <OutcomeView outcome={outcome} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="blk">
+      <h5>
+        {sb.repos.length > 1 ? (
+          <select className="opt repo-pick" value={repo.name} onChange={(e) => setCurrent(e.target.value)} aria-label="Repository" disabled={!!busy}>
+            {sb.repos.map((r) => (
+              <option key={r.name} value={r.name}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="repo-name" title={repo.cloneUrl ?? repo.hostPath}>
+            {repo.name}
+          </span>
+        )}
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => setAdding(true)}
+          disabled={!!busy}
+          title="Bring another repository in"
+          aria-label="Add a repository"
+        >
+          +
         </button>
-      )}
-      {outcome && <OutcomeView outcome={outcome} />}
+      </h5>
+      <RepoSteps
+        repo={repo}
+        review={reviews[repo.name]}
+        ready={ready}
+        busy={busy?.repo === repo.name ? busy.op : busy ? "other" : null}
+        onSend={() => run("send", repo.name)}
+        onGet={() => getChanges(repo)}
+        onReview={() => openReview(repo)}
+        onPush={() => run("push", repo.name)}
+        onUnlink={() => run("unlink", repo.name)}
+      />
+      {outcome && !reviewing && <OutcomeView outcome={outcome} />}
       {reviewed && reviews[reviewed.name] && (
         <ReviewDialog
           repo={reviewed}
@@ -126,75 +168,107 @@ function OutcomeView({ outcome }: { outcome: Outcome }) {
   );
 }
 
-function RepoCard(props: {
+interface Step {
+  key: "send" | "get" | "review" | "push";
+  title: string;
+  detail: string;
+  action: string;
+  hint: string;
+  run: () => void;
+  needsSandbox?: boolean;
+  disabled?: boolean;
+}
+
+/** The repository as four steps, with the next one highlighted. */
+function RepoSteps(props: {
   repo: RepoLink;
+  review: RepoReview | undefined;
   ready: boolean;
-  disabled: boolean;
-  working: string | null;
+  /** The action running on this repository, or "other" when one runs on another. */
+  busy: RepoOp | "other" | null;
   onSend: () => void;
   onGet: () => void;
   onReview: () => void;
+  onPush: () => void;
   onUnlink: () => void;
 }) {
-  const { repo: r, ready, disabled: busy, working } = props;
+  const { repo: r, review: v, ready, busy } = props;
   const [armed, setArmed] = useState(false);
+  const waiting = v?.commits.length ?? 0;
+  const added = v?.files.reduce((n, f) => n + f.added, 0) ?? 0;
+  const removed = v?.files.reduce((n, f) => n + f.removed, 0) ?? 0;
+  const unpushed = !!r.mergedAt && (!r.pushedAt || r.pushedAt < r.mergedAt);
+  const next: Step["key"] = !r.sentAt ? "send" : waiting ? "review" : unpushed ? "push" : "get";
+  const steps: Step[] = [
+    {
+      key: "send",
+      title: "In the sandbox",
+      detail: r.sentAt ? `${r.base} sent ${ago(r.sentAt)} · ${r.sandboxPath}` : r.sandboxPath,
+      action: `Send ${r.base}`,
+      hint: `Pull ${r.base} from origin on this machine, then send it into the sandbox as host/${r.base}. Ask the agent to merge it.`,
+      run: props.onSend,
+      needsSandbox: true,
+    },
+    {
+      key: "get",
+      title: "Agent's work",
+      detail: r.fetchedAt ? `last got ${ago(r.fetchedAt)}` : "Ask the agent to commit, then get it",
+      action: "Get changes",
+      hint: `Bring the agent's commits on ${r.branch} out to ${r.hostPath}`,
+      run: props.onGet,
+      needsSandbox: true,
+    },
+    {
+      key: "review",
+      title: "Review",
+      detail: !v ? "…" : waiting ? `${waiting} commit${waiting === 1 ? "" : "s"} · +${added} −${removed}` : "Nothing waiting",
+      action: waiting ? "Review & merge" : "Review",
+      hint: `Commits and diff of ${r.branch} against ${r.base}; merge from there`,
+      run: props.onReview,
+    },
+    {
+      key: "push",
+      title: `${r.base} on origin`,
+      detail: unpushed ? `merged ${ago(r.mergedAt as number)}, not pushed` : r.pushedAt ? `pushed ${ago(r.pushedAt)}` : "Nothing merged yet",
+      action: `Push ${r.base}`,
+      hint: `git push origin ${r.base}`,
+      run: props.onPush,
+      disabled: !unpushed,
+    },
+  ];
   return (
-    <div className="repo">
-      <div className="repo-head">
-        <b title={r.cloneUrl ?? r.hostPath}>{r.name}</b>
-        <span className="mono muted">
-          {r.base} ← {r.branch}
+    <>
+      <ol className="steps">
+        {steps.map((s, i) => {
+          const running = busy !== null && busy !== "other" && (busy === s.key || (busy === "merge" && s.key === "review"));
+          return (
+            <li key={s.key} className={s.key === next ? "step next" : "step"}>
+              <span className="step-n">{i + 1}</span>
+              <div className="step-text">
+                <b>{s.title}</b>
+                <span title={s.detail}>{s.detail}</span>
+              </div>
+              <button
+                type="button"
+                className={`btn small${s.key === next ? " primary" : ""}`}
+                onClick={s.run}
+                disabled={!!busy || s.disabled || (s.needsSandbox && !ready)}
+                title={s.hint}
+              >
+                {running ? BUSY[busy as RepoOp] : s.action}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="repo-foot">
+        <span className="mono muted" title={`${r.hostPath}\nThe agent works on ${r.branch} in ${r.sandboxPath}`}>
+          {/* Truncated from the left (rtl); bdi keeps the path itself left-to-right. */}
+          <bdi>{r.hostPath}</bdi>
         </span>
-      </div>
-      <dl className="kv">
-        <dt>Here</dt>
-        <dd className="mono" title={r.hostPath}>
-          {r.hostPath}
-        </dd>
-        <dt>Sandbox</dt>
-        <dd className="mono" title={r.sandboxPath}>
-          {r.sandboxPath}
-        </dd>
-        {r.cloneUrl && (
-          <>
-            <dt>Origin</dt>
-            <dd className="mono" title={r.cloneUrl}>
-              {r.cloneUrl}
-            </dd>
-          </>
-        )}
-        <dt>Last</dt>
-        <dd>
-          {[r.sentAt && `sent ${ago(r.sentAt)}`, r.fetchedAt && `got ${ago(r.fetchedAt)}`, r.mergedAt && `merged ${ago(r.mergedAt)}`]
-            .filter(Boolean)
-            .join(" · ") || "–"}
-        </dd>
-      </dl>
-      <div className="repo-acts">
         <button
           type="button"
-          className="btn small"
-          onClick={props.onSend}
-          disabled={!!busy || !ready}
-          title={`Pull ${r.base} from origin on this machine, then send it into the sandbox as host/${r.base}`}
-        >
-          Send latest {r.base}
-        </button>
-        <button
-          type="button"
-          className="btn small primary"
-          onClick={props.onGet}
-          disabled={!!busy || !ready}
-          title={`Bring the agent's commits on ${r.branch} out to this machine, then review them`}
-        >
-          Get changes
-        </button>
-        <button type="button" className="btn small" onClick={props.onReview} disabled={!!busy} title={`Review ${r.branch} against ${r.base}`}>
-          Review
-        </button>
-        <button
-          type="button"
-          className={`btn small danger${armed ? " armed" : ""}`}
+          className={`linklike danger${armed ? " armed" : ""}`}
           onClick={() => (armed ? props.onUnlink() : setArmed(true))}
           onBlur={() => setArmed(false)}
           disabled={!!busy}
@@ -203,8 +277,7 @@ function RepoCard(props: {
           {armed ? "Unlink?" : "Unlink"}
         </button>
       </div>
-      {working && <p className="muted">{working}</p>}
-    </div>
+    </>
   );
 }
 

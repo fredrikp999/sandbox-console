@@ -393,6 +393,8 @@ export class Bridge implements SessionHost {
         case "push":
           r = linked();
           await repos.push(r, log);
+          r.pushedAt = Date.now();
+          save(r);
           break;
         case "unlink":
           r = linked();

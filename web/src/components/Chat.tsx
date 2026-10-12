@@ -2,11 +2,12 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type BundleStatus, downloadBundle } from "../bundle.ts";
-import { agentLabel } from "../format.ts";
+import { agentLabel, tokens } from "../format.ts";
 import { type RequestError, type SessionView, store, useStore } from "../store.ts";
 import { Composer, type ConsoleCommand } from "./Composer.tsx";
 import { ConversationLog } from "./ConversationLog.tsx";
 import { flattenOptions, ModelPicker, type PickerHandle } from "./ModelPicker.tsx";
+import { SandboxActions } from "./SandboxActions.tsx";
 import { StartSession } from "./StartSession.tsx";
 import { Threads } from "./Threads.tsx";
 
@@ -152,9 +153,31 @@ export function Chat() {
     );
   }
 
+  const context = info?.usage?.used !== undefined ? `${tokens(info.usage.used)} / ${tokens(info.usage.size)} tokens` : null;
   const sub = info
-    ? `${info.agentInfo?.name ?? agentLabel(agents, info.agent)}${info.agentInfo?.version ? ` ${info.agentInfo.version}` : ""} · ${info.cwd}${dead ? " · exited" : ""}`
+    ? [
+        `${info.agentInfo?.name ?? agentLabel(agents, info.agent)}${info.agentInfo?.version ? ` ${info.agentInfo.version}` : ""}`,
+        info.cwd,
+        context,
+        dead ? "exited" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
     : `${agentLabel(agents, sb?.agent)} · not connected`;
+  // The rest of the details, one hover away.
+  const details = info
+    ? [
+        `Agent: ${info.agentCmd.join(" ")}`,
+        `Directory: ${info.cwd}`,
+        `Session: ${info.sessionId}`,
+        info.usage?.totals &&
+          `Tokens this session: ${tokens(info.usage.totals.totalTokens)} (in ${info.usage.totals.inputTokens}, out ${info.usage.totals.outputTokens})`,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : sb
+      ? `Phase: ${sb.phase}\nCreated: ${sb.created}`
+      : undefined;
 
   const send = (text: string) => {
     if (!info) return false;
@@ -178,11 +201,14 @@ export function Chat() {
   return (
     <main className="pane">
       <div className="pane-head chat-head">
-        <div className="title">
+        <div className="title" title={details}>
           <b>{selected}</b>
           <span>{sub}</span>
         </div>
-        {view && !dead && <ConfigControls view={view} picker={picker} onError={(text) => setFlash({ tone: "error", text })} />}
+        <div className="head-tools">
+          {view && !dead && <ConfigControls view={view} picker={picker} onError={(text) => setFlash({ tone: "error", text })} />}
+          {sb && <SandboxActions sb={sb} sessionId={info?.sessionId} cwd={info?.cwd} alive={!!info && !dead} />}
+        </div>
       </div>
       {view && <Threads sandbox={selected} onError={(text) => setFlash({ tone: "error", text })} />}
       <div
