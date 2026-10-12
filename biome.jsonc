@@ -1,0 +1,25 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": { "includes": ["**", "!!**/dist", "!docs/mockup.html"] },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 150 },
+  "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        // One stylesheet ordered by component; later, more general selectors are intended.
+        "noDescendingSpecificity": "off"
+      }
+    }
+  },
+  "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } },
+  "overrides": [
+    {
+      // Tests poke at raw protocol payloads and assert on values they know are there.
+      "includes": ["**/*.test.ts", "test/**"],
+      "linter": { "rules": { "suspicious": { "noExplicitAny": "off" }, "style": { "noNonNullAssertion": "off" } } }
+    }
+  ]
+}

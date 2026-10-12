@@ -1,9 +1,10 @@
 // The conversation log: one component per kind of item (DESIGN.md section 5, Middle).
-import { memo, useState } from "react";
+
 import type { PermissionOption } from "@agentclientprotocol/sdk";
+import { memo, useState } from "react";
 import { type Conversation, type Item, type PermissionItem, permissionSubject, type ToolItem } from "../conversation.ts";
+import { duration } from "../format.ts";
 import { store } from "../store.ts";
-import { duration } from "../util.ts";
 import { DiffView } from "./DiffView.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -30,11 +31,12 @@ function toolStatus(t: ToolItem, now: number) {
   }
 }
 
-function rawOutputText(raw: any): string | undefined {
+function rawOutputText(raw: unknown): string | undefined {
   if (raw == null) return undefined;
   if (typeof raw === "string") return raw;
-  if (typeof raw.output === "string") return raw.output;
-  if (typeof raw.error === "string") return raw.error;
+  const r = raw as { output?: unknown; error?: unknown };
+  if (typeof r.output === "string") return r.output;
+  if (typeof r.error === "string") return r.error;
   return JSON.stringify(raw, null, 2);
 }
 
@@ -58,20 +60,22 @@ const ToolCard = memo(function ToolCard({ t }: { t: ToolItem }) {
         <div className="tool-body">
           {command && command !== t.title && <pre>$ {command}</pre>}
           {t.content.map((c, i) => {
+            // Tool content is replaced as a whole on each update, so position is its identity.
+            const key = `${c.type}-${i}`;
             if (c.type === "diff") {
               return (
-                <div key={i}>
+                <div key={key}>
                   <div className="file">{c.path}</div>
                   <DiffView path={c.path} oldText={c.oldText} newText={c.newText} />
                 </div>
               );
             }
             if (c.type === "content") {
-              const inner: any = c.content;
-              return <pre key={i}>{inner.type === "text" ? inner.text : `[${inner.type}]`}</pre>;
+              const inner = c.content;
+              return <pre key={key}>{inner.type === "text" ? inner.text : `[${inner.type}]`}</pre>;
             }
             return (
-              <div key={i} className="note">
+              <div key={key} className="note">
                 Terminal output isn't shown: the console gives the agent no terminal capability.
               </div>
             );
@@ -107,14 +111,23 @@ function optionClass(o: PermissionOption) {
   return "btn outline-warn";
 }
 
+// Labels that just restate the kind, so the resolved line doesn't repeat them.
+const PLAIN_LABELS: Record<string, string[]> = {
+  allow_once: ["allow", "allow once", "allowed once"],
+  allow_always: ["always allow", "allow always", "always allowed"],
+  reject_once: ["reject", "reject once", "rejected", "deny"],
+  reject_always: ["always reject", "reject always", "always rejected", "always deny"],
+};
+
 function sameMeaning(name: string, kind: string) {
-  return name.trim().toLowerCase() === (KIND_DONE[kind] ?? "").toLowerCase();
+  return (PLAIN_LABELS[kind] ?? []).includes(name.trim().toLowerCase());
 }
 
 const PermissionCard = memo(function PermissionCard({ p, conv, sessionId }: { p: PermissionItem; conv: Conversation; sessionId: string }) {
   const { question, text } = permissionSubject(p, conv);
   if (p.resolved) {
-    const chosen = p.options.find((o) => o.optionId === p.resolved!.optionId);
+    const chosenId = p.resolved.optionId;
+    const chosen = p.options.find((o) => o.optionId === chosenId);
     const done = chosen ? (KIND_DONE[chosen.kind] ?? chosen.name) : "Cancelled";
     return (
       <div className="perm resolved">
@@ -138,7 +151,13 @@ const PermissionCard = memo(function PermissionCard({ p, conv, sessionId }: { p:
       </div>
       <div className="acts">
         {p.options.map((o) => (
-          <button key={o.optionId} className={optionClass(o)} onClick={() => answer(o.optionId)} title={`The agent's option "${o.name}" (${o.kind})`}>
+          <button
+            type="button"
+            key={o.optionId}
+            className={optionClass(o)}
+            onClick={() => answer(o.optionId)}
+            title={`The agent's option "${o.name}" (${o.kind})`}
+          >
             {o.name}
             <span className="kind-tag">{KIND_TAG[o.kind] ?? `unknown: ${o.kind}`}</span>
           </button>
@@ -181,6 +200,8 @@ function ItemView({ item, conv, sessionId }: { item: Item; conv: Conversation; s
           <h4>Plan</h4>
           <ul>
             {item.entries.map((e, i) => (
+              // The plan is replaced in full on every update; entries have no id of their own.
+              // biome-ignore lint/suspicious/noArrayIndexKey: position is the identity here
               <li key={i} className={e.status === "completed" ? "done" : e.status === "in_progress" ? "now" : ""}>
                 <span className="chk">{e.status === "completed" ? "✓" : e.status === "in_progress" ? "●" : "○"}</span>
                 <span>{e.content}</span>
@@ -222,11 +243,16 @@ function ItemView({ item, conv, sessionId }: { item: Item; conv: Conversation; s
   }
 }
 
-export const LogItems = memo(function LogItems({ conv, sessionId }: { conv: Conversation; sessionId: string }) {
+export const ConversationLog = memo(function ConversationLog({ conv, sessionId }: { conv: Conversation; sessionId: string }) {
   return (
     <>
       {conv.items.map((item, i) => (
-        <ItemView key={item.kind === "tool" ? `t-${item.id}` : item.kind === "permission" ? `p-${item.requestId}` : i} item={item} conv={conv} sessionId={sessionId} />
+        <ItemView
+          key={item.kind === "tool" ? `t-${item.id}` : item.kind === "permission" ? `p-${item.requestId}` : i}
+          item={item}
+          conv={conv}
+          sessionId={sessionId}
+        />
       ))}
     </>
   );

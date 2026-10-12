@@ -1,4 +1,4 @@
-// End-to-end through the real bridge, with test/fake-openshell.mjs as the CLI.
+// End-to-end through the real bridge, with test/fixtures/fake-openshell.mjs as the CLI.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
@@ -18,7 +18,7 @@ before(async () => {
   server = spawn(process.execPath, ["--import", "tsx", join(ROOT, "server/index.ts"), "--port", String(PORT)], {
     env: {
       ...process.env,
-      OPENSHELL_BIN: join(ROOT, "test/fake-openshell.mjs"),
+      OPENSHELL_BIN: join(ROOT, "test/fixtures/fake-openshell.mjs"),
       CONSOLE_TOKEN: TOKEN,
       CONSOLE_STATE: join(mkdtempSync(join(tmpdir(), "sc-test-")), "state.json"),
     },
@@ -39,7 +39,11 @@ function connect(opts: { origin?: string; token?: string | null } = {}) {
   ws.on("message", (d) => {
     const m = JSON.parse(String(d));
     inbox.push(m);
-    for (const w of [...waiters]) if (w.pred(m)) (waiters.splice(waiters.indexOf(w), 1), w.resolve(m));
+    for (const w of [...waiters]) {
+      if (!w.pred(m)) continue;
+      waiters.splice(waiters.indexOf(w), 1);
+      w.resolve(m);
+    }
   });
   const next = (pred: (m: any) => boolean, ms = 10_000) =>
     new Promise<any>((resolve, reject) => {
@@ -49,7 +53,11 @@ function connect(opts: { origin?: string; token?: string | null } = {}) {
       setTimeout(() => reject(new Error("timed out waiting for a message")), ms);
     });
   const send = (m: object) => ws.send(JSON.stringify(m));
-  return { ws, inbox, next, send, opened: new Promise((r, j) => (ws.on("open", r), ws.on("unexpected-response", (_q, res) => j(res.statusCode)))) };
+  const opened = new Promise((resolve, reject) => {
+    ws.on("open", resolve);
+    ws.on("unexpected-response", (_req, res) => reject(res.statusCode));
+  });
+  return { ws, inbox, next, send, opened };
 }
 
 /** A raw request, so the Host header can be anything. */
@@ -134,7 +142,10 @@ test("a full turn: plan, diff, permission, fs refusal, end_turn", async () => {
   c.send({ type: "permission_answer", sessionId: sid, requestId: perm.requestId, optionId: "once" });
   const end = await c.next((m) => m.type === "turn_end");
   assert.equal(end.stopReason, "end_turn");
-  const text = c.inbox.filter((m) => m.type === "event" && m.update.sessionUpdate === "agent_message_chunk").map((m) => m.update.content.text).join("");
+  const text = c.inbox
+    .filter((m) => m.type === "event" && m.update.sessionUpdate === "agent_message_chunk")
+    .map((m) => m.update.content.text)
+    .join("");
   assert.match(text, /refused with -32601/);
   assert.ok(c.inbox.some((m) => m.type === "event" && m.update.content?.[0]?.type === "diff"));
 
@@ -203,7 +214,7 @@ test("git bundle download: success, branch names that aren't Latin-1, and errors
 
   const notRepo = await fetch(`${BASE}/api/bundle?sessionId=${sid}&dir=/sandbox/nothing`, { headers: AUTH });
   assert.equal(notRepo.status, 500);
-  assert.match((await notRepo.json()).detail, /not a git repository/);
+  assert.match(((await notRepo.json()) as { detail: string }).detail, /not a git repository/);
 
   const relative = await fetch(`${BASE}/api/bundle?sessionId=${sid}&dir=--upload-pack=x`, { headers: AUTH });
   assert.equal(relative.status, 400);

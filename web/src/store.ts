@@ -1,14 +1,7 @@
 // Client state: one WebSocket to the bridge, the sandbox list, and a folded
 // conversation per open session. Reconnects and replays what it missed.
 import { useSyncExternalStore } from "react";
-import type {
-  AgentInfo,
-  ClientMessage,
-  GatewayStatus,
-  SandboxRow,
-  ServerMessage,
-  SessionInfo,
-} from "../../shared/protocol.ts";
+import type { AgentInfo, ClientMessage, GatewayStatus, SandboxRow, ServerMessage, SessionInfo } from "../../shared/protocol.ts";
 import { authHeaders, getToken, initToken, wsProtocols } from "./auth.ts";
 import { apply, type Conversation, emptyConversation } from "./conversation.ts";
 
@@ -71,6 +64,10 @@ class Store {
   private queue: ServerMessage[] = [];
   private flushScheduled = false;
 
+  private notify() {
+    for (const l of this.listeners) l();
+  }
+
   subscribe = (fn: () => void) => {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
@@ -79,7 +76,7 @@ class Store {
   private set(patch: Partial<State> | ((s: State) => Partial<State>)) {
     const p = typeof patch === "function" ? patch(this.state) : patch;
     this.state = { ...this.state, ...p };
-    this.listeners.forEach((l) => l());
+    this.notify();
   }
 
   connect() {
@@ -121,7 +118,7 @@ class Store {
       let s = this.state;
       for (const msg of batch) s = this.reduce(s, msg);
       this.state = s;
-      this.listeners.forEach((l) => l());
+      this.notify();
     });
   }
 
@@ -224,8 +221,9 @@ class Store {
       case "network":
         this.settle(m);
         if (m.type === "error" && !m.reqId) {
-          const v = m.sessionId ? s.sessions[m.sessionId] : undefined;
-          if (v) return { ...s, sessions: { ...s.sessions, [m.sessionId!]: { ...v, error: { message: m.message, hint: m.hint, at: Date.now() } } } };
+          const id = m.sessionId;
+          const v = id ? s.sessions[id] : undefined;
+          if (id && v) return { ...s, sessions: { ...s.sessions, [id]: { ...v, error: { message: m.message, hint: m.hint, at: Date.now() } } } };
           console.warn("bridge:", m.message, m.detail ?? "");
         }
         return s;
@@ -236,7 +234,7 @@ class Store {
         let info = v.info;
         if (m.type === "event") {
           // These can arrive any time after session/new; keep the header and slash menu current.
-          const u: any = m.update;
+          const u = m.update;
           if (u.sessionUpdate === "available_commands_update") info = { ...info, commands: u.availableCommands ?? [] };
           else if (u.sessionUpdate === "config_option_update") info = { ...info, configOptions: u.configOptions ?? info.configOptions };
           else if (u.sessionUpdate === "usage_update") info = { ...info, usage: { ...info.usage, used: u.used, size: u.size } };

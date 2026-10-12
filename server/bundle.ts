@@ -53,13 +53,13 @@ export async function makeBundle(sandbox: string, repo: string): Promise<Bundle>
       r.code === 3 ? "Ask the agent to commit its work first." : undefined,
     );
   }
-  const [branch = "", commits = "0", base = ""] = r.stdout.trim().split("\n").pop()!.split(" ");
+  const [branch = "", commits = "0", base = ""] = (r.stdout.trim().split("\n").pop() ?? "").split(" ");
   const dir = await mkdtemp(join(tmpdir(), "sandbox-console-"));
   const cleanup = async () => {
     await rm(dir, { recursive: true, force: true });
   };
   try {
-    await download(sandbox, remote, dir + "/");
+    await download(sandbox, remote, `${dir}/`);
     const files = await readdir(dir);
     if (!files.length) throw new CliError("The bundle download produced no file", "");
     const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/g, "-");

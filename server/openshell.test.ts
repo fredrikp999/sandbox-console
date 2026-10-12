@@ -14,12 +14,22 @@ test("counts allowed and denied connections per host, denied first", () => {
   const hosts = parseNetworkLog(LOG);
   assert.deepEqual(
     hosts.map((h) => [h.host, h.allowed, h.denied]),
-    [["models.opencode.ai", 0, 2], ["pypi.org", 0, 1], ["openrouter.ai", 1, 0]],
+    [
+      ["models.opencode.ai", 0, 2],
+      ["pypi.org", 0, 1],
+      ["openrouter.ai", 1, 0],
+    ],
   );
   assert.deepEqual(hosts.find((h) => h.host === "pypi.org")!.binaries, ["/usr/bin/curl"]);
 });
 
 test("ignores lines before the session started", () => {
   const hosts = parseNetworkLog(LOG, 1791697645_600);
-  assert.deepEqual(hosts.map((h) => [h.host, h.denied]), [["models.opencode.ai", 1], ["pypi.org", 1]]);
+  assert.deepEqual(
+    hosts.map((h) => [h.host, h.denied]),
+    [
+      ["models.opencode.ai", 1],
+      ["pypi.org", 1],
+    ],
+  );
 });

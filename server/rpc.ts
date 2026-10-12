@@ -21,14 +21,24 @@ export class RpcError extends Error {
 
 export class TransportClosed extends Error {}
 
-type IncomingRequest = (method: string, params: any) => Promise<unknown>;
-type IncomingNotification = (method: string, params: any) => void;
+// Params arrive as the agent sent them: the handlers check what they use.
+type IncomingRequest = (method: string, params: unknown) => Promise<unknown>;
+type IncomingNotification = (method: string, params: unknown) => void;
+
+/** A JSON-RPC message off the wire, before anything about it is trusted. */
+interface WireMessage {
+  id?: number | string;
+  method?: unknown;
+  params?: unknown;
+  result?: unknown;
+  error?: { code?: number; message?: string; data?: unknown };
+}
 
 export const METHOD_NOT_FOUND = -32601;
 
 export class JsonRpcPeer {
   private nextId = 0;
-  private pending = new Map<number, { method: string; resolve: (v: any) => void; reject: (e: Error) => void }>();
+  private pending = new Map<number | string, { method: string; resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private closed = false;
   readonly stderrTail: string[] = [];
 
@@ -58,13 +68,13 @@ export class JsonRpcPeer {
 
   private send(msg: object) {
     if (this.closed) throw new TransportClosed("agent process has exited");
-    this.child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
+    this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...msg })}\n`);
   }
 
   private handleLine(raw: string) {
     const line = raw.trim();
     if (!line) return;
-    let msg: any;
+    let msg: WireMessage;
     try {
       msg = JSON.parse(line);
     } catch {
@@ -74,11 +84,11 @@ export class JsonRpcPeer {
     }
     if (msg == null || typeof msg !== "object") return;
 
-    if (msg.method && msg.id !== undefined) {
+    if (typeof msg.method === "string" && msg.id !== undefined) {
       const id = msg.id;
       this.onRequest(msg.method, msg.params ?? {}).then(
         (result) => !this.closed && this.send({ id, result: result ?? null }),
-        (err: any) =>
+        (err: Error) =>
           !this.closed &&
           this.send({
             id,
@@ -88,7 +98,7 @@ export class JsonRpcPeer {
             },
           }),
       );
-    } else if (msg.method) {
+    } else if (typeof msg.method === "string") {
       this.onNotification(msg.method, msg.params ?? {});
     } else if (msg.id !== undefined) {
       const p = this.pending.get(msg.id);
@@ -101,14 +111,24 @@ export class JsonRpcPeer {
     }
   }
 
-  request<T = any>(method: string, params: object, timeoutMs?: number): Promise<T> {
+  /**
+   * Send a request and wait for its result. `T` is what the agent should answer
+   * with per the ACP schema; it isn't validated, so callers treat fields as optional.
+   */
+  request<T>(method: string, params: object, timeoutMs?: number): Promise<Partial<T>> {
     const id = ++this.nextId;
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<Partial<T>>((resolve, reject) => {
       let timer: NodeJS.Timeout | undefined;
       this.pending.set(id, {
         method,
-        resolve: (v) => (clearTimeout(timer), resolve(v)),
-        reject: (e) => (clearTimeout(timer), reject(e)),
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve((v ?? {}) as Partial<T>);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
       });
       if (timeoutMs) {
         timer = setTimeout(() => {

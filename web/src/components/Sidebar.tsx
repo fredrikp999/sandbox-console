@@ -1,7 +1,7 @@
 // Left column: gateway line, sandbox rows with status, "New sandbox".
 import { useEffect, useState } from "react";
+import { dotClass, sandboxStatus } from "../format.ts";
 import { store, useStore } from "../store.ts";
-import { dotClass, sandboxStatus } from "../util.ts";
 import { NewSandbox } from "./NewSandbox.tsx";
 
 function ThemeToggle() {
@@ -18,7 +18,7 @@ function ThemeToggle() {
     setTheme(next);
   };
   return (
-    <button className="icon-btn" onClick={flip} title={`Theme: ${theme} (click for ${next})`} aria-label={`Theme: ${theme}`}>
+    <button type="button" className="icon-btn" onClick={flip} title={`Theme: ${theme} (click for ${next})`} aria-label={`Theme: ${theme}`}>
       {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
     </button>
   );
@@ -72,7 +72,7 @@ export function Sidebar() {
         {rows.length === 0 && !listError && <li className="sb-empty">{link === "open" ? "No sandboxes yet. Create one below." : ""}</li>}
         {rows.map(({ s, st }) => (
           <li key={s.name}>
-            <button className="sb" aria-current={s.name === selected} onClick={() => store.select(s.name)}>
+            <button type="button" className="sb" aria-current={s.name === selected} onClick={() => store.select(s.name)}>
               <span className={dotClass(st.tone)} />
               <span className="name" title={s.name}>
                 {s.name}
@@ -86,7 +86,7 @@ export function Sidebar() {
         ))}
       </ul>
       <div className="side-foot">
-        <button className="btn full" onClick={() => setCreating(true)} disabled={link !== "open"}>
+        <button type="button" className="btn full" onClick={() => setCreating(true)} disabled={link !== "open"}>
           New sandbox
         </button>
       </div>

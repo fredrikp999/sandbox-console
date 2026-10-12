@@ -9,9 +9,18 @@ const chunk = (kind: string, text: string) =>
 const other = () => ({ type: "turn_start", sessionId: "s", seq: ++seq, ts: seq }) as SessionEvent;
 
 test("compact merges runs of the same chunk kind and keeps the last seq", () => {
-  const log = [chunk("agent_thought_chunk", "a"), chunk("agent_message_chunk", "Hel"), chunk("agent_message_chunk", "lo"), other(), chunk("agent_message_chunk", "!")];
+  const log = [
+    chunk("agent_thought_chunk", "a"),
+    chunk("agent_message_chunk", "Hel"),
+    chunk("agent_message_chunk", "lo"),
+    other(),
+    chunk("agent_message_chunk", "!"),
+  ];
   const out = compact(log);
-  assert.deepEqual(out.map((e) => (e.type === "event" ? (e.update as any).content.text : e.type)), ["a", "Hello", "turn_start", "!"]);
+  assert.deepEqual(
+    out.map((e) => (e.type === "event" ? (e.update as any).content.text : e.type)),
+    ["a", "Hello", "turn_start", "!"],
+  );
   assert.equal(out[1].seq, log[2].seq);
 });
 

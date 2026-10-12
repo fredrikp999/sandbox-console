@@ -53,8 +53,28 @@ Object.assign(globalThis, {
 const { store } = await import("./store.ts");
 const tick = (ms = 5) => new Promise((r) => setTimeout(r, ms));
 
-const info = { sessionId: "s1", sandbox: "c1", agent: "opencode", agentCmd: [], agentInfo: null, canLoad: false, canList: false, cwd: "/sandbox", configOptions: [], commands: [], state: "idle", startedAt: 0, lastSeq: 0 };
-const chunk = (seq: number, text: string) => ({ type: "event", sessionId: "s1", seq, ts: seq, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
+const info = {
+  sessionId: "s1",
+  sandbox: "c1",
+  agent: "opencode",
+  agentCmd: [],
+  agentInfo: null,
+  canLoad: false,
+  canList: false,
+  cwd: "/sandbox",
+  configOptions: [],
+  commands: [],
+  state: "idle",
+  startedAt: 0,
+  lastSeq: 0,
+};
+const chunk = (seq: number, text: string) => ({
+  type: "event",
+  sessionId: "s1",
+  seq,
+  ts: seq,
+  update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+});
 const agentText = () => (store.state.sessions.s1?.conv.items[0] as any)?.text;
 
 test("takes the token out of the URL, keeps it per origin, and sends it as a subprotocol", () => {

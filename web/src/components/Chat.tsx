@@ -1,14 +1,23 @@
 // Middle column: header with model picker, the conversation log, the composer.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { SessionConfigOption } from "@agentclientprotocol/sdk";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type BundleStatus, downloadBundle } from "../bundle.ts";
-import { RequestError, type SessionView, store, useStore } from "../store.ts";
-import { agentLabel } from "../util.ts";
+import { agentLabel } from "../format.ts";
+import { type RequestError, type SessionView, store, useStore } from "../store.ts";
 import { Composer, type ConsoleCommand } from "./Composer.tsx";
-import { LogItems } from "./Items.tsx";
+import { ConversationLog } from "./ConversationLog.tsx";
 import { flattenOptions, ModelPicker, type PickerHandle } from "./ModelPicker.tsx";
 import { StartSession } from "./StartSession.tsx";
 
-function ConfigControls({ view, picker, onError }: { view: SessionView; picker: React.RefObject<PickerHandle | null>; onError: (e: string) => void }) {
+function ConfigControls({
+  view,
+  picker,
+  onError,
+}: {
+  view: SessionView;
+  picker: React.RefObject<PickerHandle | null>;
+  onError: (e: string) => void;
+}) {
   const [busy, setBusy] = useState<string | null>(null);
   const set = async (configId: string, value: string) => {
     setBusy(configId);
@@ -21,16 +30,34 @@ function ConfigControls({ view, picker, onError }: { view: SessionView; picker: 
       setBusy(null);
     }
   };
-  const selects = view.info.configOptions.filter((o: any) => o.type === "select");
+  const selects = view.info.configOptions.filter((o): o is Extract<SessionConfigOption, { type: "select" }> => o.type === "select");
   return (
     <div className="head-tools">
-      {selects.map((o: any) => {
+      {selects.map((o) => {
         const options = flattenOptions(o.options);
         if (o.category === "model" || o.id === "model") {
-          return <ModelPicker key={o.id} ref={picker} label={o.name ?? "Model"} current={o.currentValue} options={options} busy={busy === o.id} onPick={(v) => set(o.id, v)} />;
+          return (
+            <ModelPicker
+              key={o.id}
+              ref={picker}
+              label={o.name ?? "Model"}
+              current={o.currentValue}
+              options={options}
+              busy={busy === o.id}
+              onPick={(v) => set(o.id, v)}
+            />
+          );
         }
         return (
-          <select key={o.id} className="opt" aria-label={o.name} title={o.description ?? o.name} value={o.currentValue} disabled={busy === o.id} onChange={(e) => set(o.id, e.target.value)}>
+          <select
+            key={o.id}
+            className="opt"
+            aria-label={o.name}
+            title={o.description ?? o.name}
+            value={o.currentValue}
+            disabled={busy === o.id}
+            onChange={(e) => set(o.id, e.target.value)}
+          >
             {options.map((x) => (
               <option key={x.value} value={x.value}>
                 {x.name}
@@ -53,19 +80,24 @@ export function Chat() {
   const picker = useRef<PickerHandle>(null);
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const [flash, setFlash] = useState<BundleStatus | null>(null);
+  // A status line under the log (bundle result, errors), shown only for the sandbox it belongs to.
+  const [flashed, setFlashed] = useState<(BundleStatus & { sandbox: string | null }) | null>(null);
+  const flash = flashed && flashed.sandbox === selected ? flashed : null;
+  const setFlash = useCallback((f: BundleStatus | null) => setFlashed(f && { ...f, sandbox: store.state.selected }), []);
 
-  useEffect(() => setFlash(null), [selected]);
   const bridgeError = view?.error;
   useEffect(() => {
     if (bridgeError) setFlash({ tone: "error", text: [bridgeError.message, bridgeError.hint].filter(Boolean).join(" ") });
-  }, [bridgeError]);
+  }, [bridgeError, setFlash]);
 
   // Follow the conversation while you are at the bottom of it.
+  const conv = view?.conv;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: conv and flash are what changes the log's height; the effect runs after they do.
   useLayoutEffect(() => {
     const el = log.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [view?.conv, flash]);
+  }, [conv, flash]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the session changes, so a newly opened one starts at the bottom.
   useEffect(() => {
     stick.current = true;
   }, [sessionId]);
@@ -84,17 +116,16 @@ export function Chat() {
       {
         name: "bundle",
         hint: "download the agent's commits as a git bundle [dir]",
-        run: (dir) => info && downloadBundle(info.sessionId, dir || undefined, setFlash),
+        run: (dir) => sessionId && downloadBundle(sessionId, dir || undefined, setFlash),
       },
       {
         name: "clear",
         hint: "start a new session in this sandbox",
         run: () =>
-          info &&
-          store.request({ type: "new_session", sessionId: info.sessionId }).catch((e: RequestError) => setFlash({ tone: "error", text: e.message })),
+          sessionId && store.request({ type: "new_session", sessionId }).catch((e: RequestError) => setFlash({ tone: "error", text: e.message })),
       },
     ],
-    [info?.sessionId],
+    [sessionId, setFlash],
   );
 
   if (!selected) {
@@ -166,11 +197,12 @@ export function Chat() {
               <div className="empty">
                 <b>Session ready</b>
                 <span>
-                  {info?.agentInfo?.name ?? "The agent"} is running in <span className="mono">{selected}</span>. Ask it something, or type <kbd>/</kbd> for commands.
+                  {info?.agentInfo?.name ?? "The agent"} is running in <span className="mono">{selected}</span>. Ask it something, or type{" "}
+                  <kbd>/</kbd> for commands.
                 </span>
               </div>
             )}
-            <LogItems conv={view.conv} sessionId={view.info.sessionId} />
+            <ConversationLog conv={view.conv} sessionId={view.info.sessionId} />
             {working && !waitingOnYou && (
               <div className="working">
                 <span className="dot ok pulse" /> Working…

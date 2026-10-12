@@ -1,7 +1,8 @@
 // Message box with the slash menu. Enter sends, Shift+Enter adds a line, Esc
 // stops the agent. Agent commands are sent as prompts; console commands run here.
-import { useEffect, useMemo, useRef, useState } from "react";
+
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface ConsoleCommand {
   name: string;
@@ -50,6 +51,8 @@ export function Composer({
     box.current?.focus();
   }, [sessionKey]);
 
+  // Grow the box with its text (up to a limit).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measures the DOM after the text changes
   useEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -68,8 +71,6 @@ export function Composer({
   const slashQuery = text.startsWith("/") && !/\s/.test(text) ? text : null;
   const hits = slashQuery !== null && !dismissed ? entries.filter((e) => e.name.startsWith(slashQuery)) : [];
   const menuOpen = hits.length > 0;
-
-  useEffect(() => setActive(0), [slashQuery]);
 
   const pick = (e: Entry) => {
     setText(`${e.name} `);
@@ -131,17 +132,23 @@ export function Composer({
     }
   };
 
-  let lastGroup = "";
   return (
     <div className="composer">
       {menuOpen && (
         <div className="slash" role="listbox" aria-label="Commands">
           {hits.map((h, i) => {
-            const head = h.group !== lastGroup ? <div className="grp">{(lastGroup = h.group)}</div> : null;
+            const head = i === 0 || hits[i - 1].group !== h.group ? <div className="grp">{h.group}</div> : null;
             return (
               <div key={h.group + h.name} style={{ display: "contents" }}>
                 {head}
-                <button type="button" role="option" aria-selected={i === active} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(h)} onMouseEnter={() => setActive(i)}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={i === active}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pick(h)}
+                  onMouseEnter={() => setActive(i)}
+                >
                   <b>{h.name}</b>
                   <span title={h.description}>{h.description}</span>
                 </button>
@@ -161,15 +168,16 @@ export function Composer({
           onChange={(e) => {
             setText(e.target.value);
             setDismissed(false);
+            setActive(0);
           }}
           onKeyDown={onKey}
         />
         {working ? (
-          <button className="btn stop" onClick={onStop} title="Stop the agent (Esc)">
+          <button type="button" className="btn stop" onClick={onStop} title="Stop the agent (Esc)">
             Stop
           </button>
         ) : (
-          <button className="btn primary" onClick={submit} disabled={!!disabled || !text.trim()}>
+          <button type="button" className="btn primary" onClick={submit} disabled={!!disabled || !text.trim()}>
             Send
           </button>
         )}

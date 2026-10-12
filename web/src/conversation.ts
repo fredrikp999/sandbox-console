@@ -1,7 +1,20 @@
 // Folds the session event log (raw ACP session/update payloads plus the
 // bridge's own events) into what the conversation pane renders.
+
+import type {
+  ContentBlock,
+  PermissionOption,
+  PlanEntry,
+  ToolCall,
+  ToolCallContent,
+  ToolCallLocation,
+  ToolCallUpdate,
+} from "@agentclientprotocol/sdk";
 import { diffLines } from "diff";
-import type { PermissionOption, PlanEntry, ToolCallContent, ToolCallLocation } from "@agentclientprotocol/sdk";
+
+/** A tool's raw input or output: whatever the agent reports, e.g. `{ command, cwd }`. */
+export type RawToolData = Record<string, unknown>;
+
 import type { SessionEvent } from "../../shared/protocol.ts";
 
 export interface ToolItem {
@@ -12,8 +25,8 @@ export interface ToolItem {
   status: string;
   content: ToolCallContent[];
   locations: ToolCallLocation[];
-  rawInput?: any;
-  rawOutput?: any;
+  rawInput?: RawToolData;
+  rawOutput?: unknown;
   startedAt: number;
   endedAt?: number;
 }
@@ -24,7 +37,7 @@ export interface PermissionTool {
   kind?: string;
   title?: string;
   status?: string;
-  rawInput?: any;
+  rawInput?: RawToolData;
   locations?: ToolCallLocation[];
 }
 
@@ -81,13 +94,15 @@ export const emptyConversation = (): Conversation => ({
   counted: {},
 });
 
-function textOf(content: any): string {
+function textOf(content: ContentBlock | undefined): string {
   if (!content) return "";
   if (content.type === "text") return content.text ?? "";
   if (content.type === "resource_link") return `[${content.name ?? content.uri}](${content.uri})`;
   if (content.type === "image") return "*(image)*";
   return "";
 }
+
+const asRecord = (v: unknown): RawToolData | undefined => (v && typeof v === "object" && Object.keys(v).length ? (v as RawToolData) : undefined);
 
 const EDIT_KINDS = new Set(["edit", "delete", "move"]);
 
@@ -135,7 +150,7 @@ function appendText(c: Conversation, kind: "agent" | "thought" | "user", text: s
   }
 }
 
-function mergeTool(prev: ToolItem | undefined, u: any, ts: number): ToolItem {
+function mergeTool(prev: ToolItem | undefined, u: ToolCall | ToolCallUpdate, ts: number): ToolItem {
   const status = u.status ?? prev?.status ?? "pending";
   const done = status === "completed" || status === "failed";
   return {
@@ -145,8 +160,8 @@ function mergeTool(prev: ToolItem | undefined, u: any, ts: number): ToolItem {
     title: u.title ?? prev?.title ?? u.toolCallId,
     status,
     content: u.content ?? prev?.content ?? [],
-    locations: u.locations && u.locations.length ? u.locations : (prev?.locations ?? u.locations ?? []),
-    rawInput: u.rawInput && Object.keys(u.rawInput).length ? u.rawInput : (prev?.rawInput ?? u.rawInput),
+    locations: u.locations?.length ? u.locations : (prev?.locations ?? u.locations ?? []),
+    rawInput: asRecord(u.rawInput) ?? prev?.rawInput,
     rawOutput: u.rawOutput ?? prev?.rawOutput,
     startedAt: prev?.startedAt ?? ts,
     endedAt: done ? (prev?.endedAt ?? ts) : undefined,
@@ -180,7 +195,7 @@ export function apply(prev: Conversation, ev: SessionEvent): Conversation {
       c.items.push({ kind: "closed", exitCode: ev.exitCode, stderrTail: ev.stderrTail, hint: ev.hint });
       break;
     case "permission_request":
-      c.items.push({ kind: "permission", requestId: ev.requestId, toolCall: ev.toolCall as any, options: ev.options });
+      c.items.push({ kind: "permission", requestId: ev.requestId, toolCall: ev.toolCall as PermissionTool, options: ev.options });
       break;
     case "permission_resolved": {
       const i = c.items.findIndex((x) => x.kind === "permission" && x.requestId === ev.requestId);
@@ -195,7 +210,7 @@ export function apply(prev: Conversation, ev: SessionEvent): Conversation {
       break;
     }
     case "event": {
-      const u: any = ev.update;
+      const u = ev.update;
       switch (u.sessionUpdate) {
         case "user_message_chunk":
           appendText(c, "user", textOf(u.content));
@@ -244,7 +259,7 @@ export function permissionTool(p: PermissionItem, c: Conversation): PermissionTo
     kind: t.kind ?? known?.toolKind,
     title: t.title ?? known?.title,
     status: t.status ?? known?.status,
-    rawInput: t.rawInput && Object.keys(t.rawInput).length ? t.rawInput : known?.rawInput,
+    rawInput: asRecord(t.rawInput) ?? known?.rawInput,
     locations: t.locations?.length ? t.locations : known?.locations,
   };
 }

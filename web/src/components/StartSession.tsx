@@ -2,8 +2,8 @@
 // why the sandbox can't be used yet.
 import { useEffect, useState } from "react";
 import type { SandboxRow } from "../../../shared/protocol.ts";
-import { RequestError, store, useStore } from "../store.ts";
-import { agentLabel } from "../util.ts";
+import { agentLabel } from "../format.ts";
+import { type RequestError, store, useStore } from "../store.ts";
 
 export function DeleteSandbox({ name }: { name: string }) {
   const [armed, setArmed] = useState(false);
@@ -23,7 +23,13 @@ export function DeleteSandbox({ name }: { name: string }) {
   };
   return (
     <>
-      <button className={`btn danger small${armed ? " armed" : ""}`} onClick={del} onBlur={() => !busy && setArmed(false)} disabled={busy}>
+      <button
+        type="button"
+        className={`btn danger small${armed ? " armed" : ""}`}
+        onClick={del}
+        onBlur={() => !busy && setArmed(false)}
+        disabled={busy}
+      >
         {busy ? "Deleting…" : armed ? `Delete ${name} and its files` : "Delete sandbox…"}
       </button>
       {error && <div className="form-error">{error}</div>}
@@ -50,7 +56,11 @@ export function StartSession({ sb, resume }: { sb: SandboxRow; resume?: boolean 
           {sb.name} is {sb.phase}
         </b>
         <span>{sb.message ?? (sb.phase === "Error" ? "OpenShell reports an error for this sandbox." : "Wait until it is Ready.")}</span>
-        {sb.phase === "Error" && <span>Delete it and create it again (its files are lost), or check it with <span className="mono">openshell sandbox get {sb.name}</span>.</span>}
+        {sb.phase === "Error" && (
+          <span>
+            Delete it and create it again (its files are lost), or check it with <span className="mono">openshell sandbox get {sb.name}</span>.
+          </span>
+        )}
         <DeleteSandbox name={sb.name} />
       </div>
     );
@@ -77,9 +87,13 @@ export function StartSession({ sb, resume }: { sb: SandboxRow; resume?: boolean 
     <div className="empty">
       <b>{resume ? "Start a new session" : "No session open"}</b>
       <span>
-        {starting
-          ? `Starting ${agentLabel(agents, agent)} in ${sb.name}…`
-          : <>Start the agent in this sandbox. The console runs <span className="mono">{cmd ?? "the agent"}</span> through the gateway.</>}
+        {starting ? (
+          `Starting ${agentLabel(agents, agent)} in ${sb.name}…`
+        ) : (
+          <>
+            Start the agent in this sandbox. The console runs <span className="mono">{cmd ?? "the agent"}</span> through the gateway.
+          </>
+        )}
       </span>
       <form className="form" onSubmit={start}>
         <label>
@@ -105,7 +119,7 @@ export function StartSession({ sb, resume }: { sb: SandboxRow; resume?: boolean 
           </div>
         )}
         <div className="acts">
-          <button className="btn primary" disabled={starting || !agent}>
+          <button type="submit" className="btn primary" disabled={starting || !agent}>
             {starting ? "Starting…" : "Start session"}
           </button>
         </div>

@@ -1,6 +1,6 @@
-// Agent registry (agents.json) and the small amount of state the console
+// Agent registry (server/agents.json) and the small amount of state the console
 // remembers per sandbox (agent, working directory, model).
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +22,7 @@ export interface AgentConfig {
 }
 
 export function loadAgents(): Map<AgentId, AgentConfig> {
-  const file = process.env.CONSOLE_AGENTS ?? join(ROOT, "agents.json");
+  const file = process.env.CONSOLE_AGENTS ?? join(ROOT, "server", "agents.json");
   const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, Omit<AgentConfig, "id">>;
   return new Map(Object.entries(raw).map(([id, a]) => [id, { id, ...a, label: a.label ?? id }]));
 }
@@ -81,7 +81,7 @@ export class StateStore {
   private save() {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
-      const tmp = this.file + ".tmp";
+      const tmp = `${this.file}.tmp`;
       writeFileSync(tmp, JSON.stringify(this.data, null, 2));
       renameSync(tmp, this.file);
     } catch (e) {

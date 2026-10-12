@@ -39,11 +39,7 @@ export function run(args: string[], timeoutMs = 30_000): Promise<RunResult> {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(
-        new CliError(
-          `openshell ${args.join(" ")} timed out after ${timeoutMs / 1000}s`,
-          stderr,
-          "Is the gateway running? Check `openshell status`.",
-        ),
+        new CliError(`openshell ${args.join(" ")} timed out after ${timeoutMs / 1000}s`, stderr, "Is the gateway running? Check `openshell status`."),
       );
     }, timeoutMs);
     child.on("error", (e: NodeJS.ErrnoException) => {
@@ -166,7 +162,10 @@ export function parseNetworkLog(text: string, sinceMs = 0): NetworkHost[] {
     if (Number(m[1]) * 1000 < sinceMs) continue;
     const [, , verdict, binary, host] = m;
     let h = hosts.get(host);
-    if (!h) hosts.set(host, (h = { host, allowed: 0, denied: 0, binaries: [] }));
+    if (!h) {
+      h = { host, allowed: 0, denied: 0, binaries: [] };
+      hosts.set(host, h);
+    }
     if (verdict === "ALLOWED") h.allowed++;
     else h.denied++;
     if (!h.binaries.includes(binary)) h.binaries.push(binary);

@@ -1,7 +1,7 @@
 // "New sandbox": name, agent, working directory. The bridge runs the same
 // `openshell sandbox create` call as sandbox.sh.
 import { useEffect, useRef, useState } from "react";
-import { RequestError, store, useStore } from "../store.ts";
+import { type RequestError, store, useStore } from "../store.ts";
 
 export function NewSandbox({ onClose }: { onClose: () => void }) {
   const agents = useStore((s) => s.agents);
@@ -38,6 +38,8 @@ export function NewSandbox({ onClose }: { onClose: () => void }) {
   };
 
   return (
+    // Clicking the backdrop closes the dialog; keyboard users have Esc (handled on window).
+    // biome-ignore lint/a11y/noStaticElementInteractions: see above
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
       <form className="modal form" onSubmit={submit} aria-label="New sandbox">
         <h3>New sandbox</h3>
@@ -53,7 +55,15 @@ export function NewSandbox({ onClose }: { onClose: () => void }) {
         </label>
         <label>
           Name
-          <input ref={first} value={name} onChange={(e) => setName(e.target.value)} placeholder={placeholder} pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?" spellCheck={false} autoComplete="off" />
+          <input
+            ref={first}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={placeholder}
+            pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?"
+            spellCheck={false}
+            autoComplete="off"
+          />
         </label>
         <label>
           Working directory
@@ -66,7 +76,7 @@ export function NewSandbox({ onClose }: { onClose: () => void }) {
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button className="btn primary" disabled={busy}>
+          <button type="submit" className="btn primary" disabled={busy}>
             {busy ? "Creating…" : "Create sandbox"}
           </button>
         </div>

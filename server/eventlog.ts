@@ -3,10 +3,17 @@ import type { SessionEvent } from "../shared/protocol.ts";
 
 const TEXT_CHUNKS = new Set(["agent_message_chunk", "agent_thought_chunk", "user_message_chunk"]);
 
-function textChunk(e: SessionEvent): string | null {
+type EventEntry = Extract<SessionEvent, { type: "event" }>;
+interface TextChunk {
+  sessionUpdate: string;
+  content: { type: "text"; text: string };
+}
+
+/** The update, if this entry is a streamed text chunk. */
+function textChunk(e: SessionEvent): TextChunk | null {
   if (e.type !== "event") return null;
-  const u: any = e.update;
-  return TEXT_CHUNKS.has(u?.sessionUpdate) && u.content?.type === "text" ? u.sessionUpdate : null;
+  const u = e.update as Partial<TextChunk>;
+  return u.sessionUpdate && TEXT_CHUNKS.has(u.sessionUpdate) && u.content?.type === "text" ? (u as TextChunk) : null;
 }
 
 /**
@@ -19,13 +26,11 @@ function textChunk(e: SessionEvent): string | null {
 export function compact(log: SessionEvent[]): SessionEvent[] {
   const out: SessionEvent[] = [];
   for (const e of log) {
-    const kind = textChunk(e);
-    const prev = out[out.length - 1];
-    if (kind && prev && textChunk(prev) === kind) {
-      const p = prev as Extract<SessionEvent, { type: "event" }>;
-      const u: any = (e as Extract<SessionEvent, { type: "event" }>).update;
-      const text = (p.update as any).content.text + u.content.text;
-      out[out.length - 1] = { ...e, update: { ...u, content: { ...u.content, text } } } as SessionEvent;
+    const chunk = textChunk(e);
+    const prev = out.length ? textChunk(out[out.length - 1]) : null;
+    if (chunk && prev && prev.sessionUpdate === chunk.sessionUpdate) {
+      const merged = { ...chunk, content: { ...chunk.content, text: prev.content.text + chunk.content.text } };
+      out[out.length - 1] = { ...(e as EventEntry), update: merged as EventEntry["update"] };
     } else out.push(e);
   }
   return out;

@@ -2,8 +2,8 @@
 import { useCallback, useEffect, useState } from "react";
 import type { NetworkHost, PastSession, ServerMessage } from "../../../shared/protocol.ts";
 import { type BundleStatus, downloadBundle } from "../bundle.ts";
-import { RequestError, type SessionView, store, useStore } from "../store.ts";
-import { ago, relPath, sandboxStatus, shortId, tokens } from "../util.ts";
+import { ago, relPath, sandboxStatus, shortId, tokens } from "../format.ts";
+import { type RequestError, type SessionView, store, useStore } from "../store.ts";
 import { DeleteSandbox } from "./StartSession.tsx";
 
 const NETWORK_EVERY = 15_000;
@@ -31,7 +31,7 @@ function Network({ sessionId, live }: { sessionId: string; live: boolean }) {
     <div className="blk">
       <h5>
         Network this session
-        <button className="icon-btn" onClick={load} title="Refresh from openshell logs" aria-label="Refresh network">
+        <button type="button" className="icon-btn" onClick={load} title="Refresh from openshell logs" aria-label="Refresh network">
           ↻
         </button>
       </h5>
@@ -51,7 +51,9 @@ function Network({ sessionId, live }: { sessionId: string; live: boolean }) {
           ))}
         </ul>
       )}
-      {hosts?.some((h) => h.denied) && <p className="muted">Denied hosts are blocked by the sandbox policy. The console doesn't change network rules.</p>}
+      {hosts?.some((h) => h.denied) && (
+        <p className="muted">Denied hosts are blocked by the sandbox policy. The console doesn't change network rules.</p>
+      )}
     </div>
   );
 }
@@ -63,7 +65,10 @@ function Past({ view }: { view: SessionView }) {
   const show = async () => {
     setError(null);
     try {
-      const r = (await store.request({ type: "list_past_sessions", sessionId: view.info.sessionId })) as Extract<ServerMessage, { type: "past_sessions" }>;
+      const r = (await store.request({ type: "list_past_sessions", sessionId: view.info.sessionId })) as Extract<
+        ServerMessage,
+        { type: "past_sessions" }
+      >;
       setList(r.sessions);
       if (r.error) setError(r.error);
     } catch (e) {
@@ -85,7 +90,7 @@ function Past({ view }: { view: SessionView }) {
     <div className="blk">
       <h5>Earlier sessions</h5>
       {!list && (
-        <button className="btn small" style={{ justifySelf: "start" }} onClick={show}>
+        <button type="button" className="btn small" style={{ justifySelf: "start" }} onClick={show}>
           Show earlier sessions
         </button>
       )}
@@ -95,7 +100,7 @@ function Past({ view }: { view: SessionView }) {
           {list.slice(0, 30).map((p) => (
             <li key={p.sessionId}>
               <span title={p.sessionId}>{p.title || shortId(p.sessionId)}</span>
-              <button className="btn small" disabled={!!busy || view.info.state === "working"} onClick={() => open(p.sessionId)}>
+              <button type="button" className="btn small" disabled={!!busy || view.info.state === "working"} onClick={() => open(p.sessionId)}>
                 {busy === p.sessionId ? "Opening…" : p.updatedAt ? ago(Date.parse(p.updatedAt)) : "Open"}
               </button>
             </li>
@@ -112,10 +117,10 @@ export function Inspector() {
   const agents = useStore((s) => s.agents);
   const sb = useStore((s) => s.sandboxes.find((x) => x.name === s.selected));
   const view = useStore((s) => (s.selected && s.bySandbox[s.selected] ? s.sessions[s.bySandbox[s.selected]] : undefined));
-  const [bundle, setBundle] = useState<BundleStatus | null>(null);
+  // The bundle status belongs to the session it was made for.
+  const [bundleFor, setBundleFor] = useState<(BundleStatus & { sessionId: string }) | null>(null);
+  const bundle = bundleFor && bundleFor.sessionId === view?.info.sessionId ? bundleFor : null;
   const [closing, setClosing] = useState(false);
-
-  useEffect(() => setBundle(null), [view?.info.sessionId]);
 
   if (!selected || (!sb && !view)) {
     return (
@@ -129,7 +134,7 @@ export function Inspector() {
 
   const info = view?.info;
   const st = sb ? sandboxStatus(sb, agents) : null;
-  const pill = info?.state === "dead" ? { pill: "Exited", tone: "bad" } : st ?? { pill: "–", tone: "idle" };
+  const pill = info?.state === "dead" ? { pill: "Exited", tone: "bad" } : (st ?? { pill: "–", tone: "idle" });
   const files = view ? Object.values(view.conv.files) : [];
   const alive = !!info && info.state !== "dead";
 
@@ -162,7 +167,9 @@ export function Inspector() {
                 {info.usage?.totals && (
                   <>
                     <dt>Tokens</dt>
-                    <dd title={`in ${info.usage.totals.inputTokens}, out ${info.usage.totals.outputTokens}`}>{tokens(info.usage.totals.totalTokens)}</dd>
+                    <dd title={`in ${info.usage.totals.inputTokens}, out ${info.usage.totals.outputTokens}`}>
+                      {tokens(info.usage.totals.totalTokens)}
+                    </dd>
                   </>
                 )}
               </>
@@ -185,8 +192,13 @@ export function Inspector() {
               <ul className="rows">
                 {files.map((f) => (
                   <li key={f.path}>
-                    <button className="linklike" title={f.path} onClick={() => document.getElementById(`tool-${f.toolId}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}>
-                      {relPath(f.path, info!.cwd)}
+                    <button
+                      type="button"
+                      className="linklike"
+                      title={f.path}
+                      onClick={() => document.getElementById(`tool-${f.toolId}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                    >
+                      {relPath(f.path, view.info.cwd)}
                     </button>
                     {f.counted ? (
                       <span>
@@ -201,7 +213,14 @@ export function Inspector() {
               </ul>
             )}
             {alive && (
-              <button className="btn" style={{ justifySelf: "start" }} disabled={bundle?.tone === "busy"} onClick={() => downloadBundle(info!.sessionId, undefined, setBundle)} title={`Bundle the commits of the current branch in ${info!.cwd}`}>
+              <button
+                type="button"
+                className="btn"
+                style={{ justifySelf: "start" }}
+                disabled={bundle?.tone === "busy"}
+                onClick={() => downloadBundle(view.info.sessionId, undefined, (b) => setBundleFor({ ...b, sessionId: view.info.sessionId }))}
+                title={`Bundle the commits of the current branch in ${view.info.cwd}`}
+              >
                 {bundle?.tone === "busy" ? "Bundling…" : "Download as git bundle"}
               </button>
             )}
@@ -215,13 +234,16 @@ export function Inspector() {
           <div className="blk">
             <h5>Approvals</h5>
             <p className="muted">
-              The agent decides what to ask about and the console never answers for you. Nothing runs on this machine: the console gives the agent no file or terminal access here.
+              The agent decides what to ask about and the console never answers for you. Nothing runs on this machine: the console gives the agent no
+              file or terminal access here.
             </p>
             {view.conv.always.length > 0 && (
               <>
                 <p className="muted">Always allowed this session (remembered by the agent):</p>
                 <ul className="rows">
                   {view.conv.always.map((a, i) => (
+                    // Append-only list of strings that may repeat; position is the identity.
+                    // biome-ignore lint/suspicious/noArrayIndexKey: see above
                     <li key={i}>
                       <span title={a}>{a}</span>
                     </li>
@@ -232,18 +254,19 @@ export function Inspector() {
           </div>
         )}
 
-        {view && alive && info!.canList && <Past key={info!.sessionId} view={view} />}
+        {view && alive && view.info.canList && <Past key={view.info.sessionId} view={view} />}
 
         <div className="blk">
           <h5>Sandbox</h5>
-          {alive && (
+          {info && alive && (
             <button
+              type="button"
               className="btn small"
               style={{ justifySelf: "start" }}
               disabled={closing}
               onClick={() => {
                 setClosing(true);
-                store.send({ type: "close_session", sessionId: info!.sessionId });
+                store.send({ type: "close_session", sessionId: info.sessionId });
                 setTimeout(() => setClosing(false), 4000);
               }}
             >

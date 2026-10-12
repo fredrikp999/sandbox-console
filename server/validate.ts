@@ -38,17 +38,21 @@ function ok(v: unknown, f: Field): boolean {
 
 /** Returns the message if it has the right shape, otherwise throws. Unknown fields are dropped. */
 export function parseClientMessage(raw: string): ClientMessage {
-  let m: any;
+  // Untrusted input: read as a plain record and check each field below.
+  let parsed: unknown;
   try {
-    m = JSON.parse(raw);
+    parsed = JSON.parse(raw);
   } catch {
     throw new Error("Bad message from the browser: not JSON");
   }
-  const spec = m && typeof m === "object" && typeof m.type === "string" ? SPEC[m.type as ClientMessage["type"]] : undefined;
-  if (!spec || !Object.hasOwn(SPEC, m.type)) throw new Error(`Bad message from the browser: unknown type ${String(m?.type)}`);
-  const out: Record<string, unknown> = { type: m.type };
-  for (const [k, f] of Object.entries(spec)) {
-    if (!ok(m[k], f)) throw Object.assign(new Error(`Bad message from the browser: ${m.type}.${k}`), { reqId: typeof m.reqId === "string" ? m.reqId : undefined });
+  const m = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+  const type = typeof m.type === "string" && Object.hasOwn(SPEC, m.type) ? (m.type as ClientMessage["type"]) : null;
+  if (!type) throw new Error(`Bad message from the browser: unknown type ${String(m.type)}`);
+  const out: Record<string, unknown> = { type };
+  for (const [k, f] of Object.entries(SPEC[type])) {
+    if (!ok(m[k], f)) {
+      throw Object.assign(new Error(`Bad message from the browser: ${type}.${k}`), { reqId: typeof m.reqId === "string" ? m.reqId : undefined });
+    }
     if (m[k] !== undefined && m[k] !== null) out[k] = m[k];
     else if (f === "s|null") out[k] = null;
   }

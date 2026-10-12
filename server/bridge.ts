@@ -3,6 +3,7 @@
 import type { WebSocket } from "ws";
 import type { AgentId, ClientMessage, GatewayStatus, NetworkHost, SandboxRow, ServerMessage } from "../shared/protocol.ts";
 import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
+import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
 import { Session, type SessionHost } from "./session.ts";
 import { NEW_SANDBOX_NAME, parseClientMessage, SANDBOX_NAME } from "./validate.ts";
@@ -19,7 +20,7 @@ interface Tab {
   subs: Set<Session>;
 }
 
-export class Console implements SessionHost {
+export class Bridge implements SessionHost {
   readonly agents = loadAgents();
   readonly state = new StateStore();
   readonly policy = findPolicy();
@@ -57,13 +58,13 @@ export class Console implements SessionHost {
       try {
         msg = parseClientMessage(String(data));
       } catch (e) {
-        return this.send(tab, { type: "error", reqId: (e as any).reqId, message: (e as Error).message });
+        return this.send(tab, { type: "error", reqId: (e as Explained).reqId, message: (e as Error).message });
       }
-      this.handle(tab, msg).catch((e) =>
+      this.handle(tab, msg).catch((e: Explained) =>
         this.send(tab, {
           type: "error",
-          reqId: (msg as any).reqId,
-          sessionId: (msg as any).sessionId,
+          reqId: "reqId" in msg ? msg.reqId : undefined,
+          sessionId: "sessionId" in msg ? msg.sessionId : undefined,
           message: e.message ?? String(e),
           detail: e.detail,
           hint: e.hint,
@@ -272,7 +273,7 @@ export class Console implements SessionHost {
     }
     if (this.raw.some((s) => s.name === name)) throw new Error(`A sandbox named ${name} already exists.`);
     const agent = this.agent(msg.agent);
-    if (!agent.image) throw new Error(`No image is configured for ${agent.label} in agents.json.`);
+    if (!agent.image) throw new Error(`No image is configured for ${agent.label} in server/agents.json.`);
     const workdir = msg.workdir?.trim() || "/sandbox";
     this.state.set(name, { agent: agent.id, cwd: workdir });
     try {

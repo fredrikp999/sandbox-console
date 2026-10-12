@@ -3,25 +3,34 @@
   "version": "0.1.0",
   "private": true,
   "description": "Local web console for coding agents in OpenShell sandboxes, over ACP",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fredrikp999/acpclient-4-sandboxes.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "build": "vite build",
-    "start": "vite build && tsx server/index.ts",
+    "start": "vite build --config web/vite.config.ts && tsx server/index.ts",
     "serve": "tsx server/index.ts",
+    "build": "vite build --config web/vite.config.ts",
     "dev": "tsx watch server/index.ts --dev",
-    "dev:web": "vite",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test server/*.test.ts web/src/*.test.ts"
+    "dev:web": "vite --config web/vite.config.ts",
+    "typecheck": "tsc -b",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "node --import tsx --test server/*.test.ts web/src/*.test.ts",
+    "check": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^1.8.0",
     "tsx": "^4.23.15",
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@agentclientprotocol/sdk": "^1.8.0",
+    "@biomejs/biome": "2.5.15",
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
     "@fontsource/instrument-sans": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",

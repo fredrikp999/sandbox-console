@@ -1,14 +1,7 @@
 // Browser <-> bridge messages (DESIGN.md section 7). JSON over one WebSocket
 // per tab, each with a `type`. ACP `session/update` payloads are passed through
 // unchanged, so the UI follows the ACP spec directly.
-import type {
-  AvailableCommand,
-  PermissionOption,
-  SessionConfigOption,
-  SessionUpdate,
-  ToolCallUpdate,
-  Usage,
-} from "@agentclientprotocol/sdk";
+import type { AvailableCommand, PermissionOption, SessionConfigOption, SessionUpdate, ToolCallUpdate, Usage } from "@agentclientprotocol/sdk";
 
 export type AgentId = string;
 
@@ -56,7 +49,7 @@ export interface SessionInfo {
   sandbox: string;
   agent: AgentId;
   agentCmd: string[];
-  agentInfo: { name?: string; version?: string; title?: string } | null;
+  agentInfo: { name?: string; version?: string; title?: string | null } | null;
   canLoad: boolean;
   canList: boolean;
   cwd: string;

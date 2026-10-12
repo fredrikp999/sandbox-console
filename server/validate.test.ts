@@ -3,8 +3,15 @@ import { test } from "node:test";
 import { parseClientMessage, SANDBOX_NAME } from "./validate.ts";
 
 test("accepts well-formed messages and drops unknown fields", () => {
-  assert.deepEqual(parseClientMessage(JSON.stringify({ type: "prompt", sessionId: "s", text: "hi", extra: 1 })), { type: "prompt", sessionId: "s", text: "hi" });
-  assert.deepEqual(parseClientMessage(JSON.stringify({ type: "permission_answer", sessionId: "s", requestId: "1", optionId: null })).type, "permission_answer");
+  assert.deepEqual(parseClientMessage(JSON.stringify({ type: "prompt", sessionId: "s", text: "hi", extra: 1 })), {
+    type: "prompt",
+    sessionId: "s",
+    text: "hi",
+  });
+  assert.deepEqual(
+    parseClientMessage(JSON.stringify({ type: "permission_answer", sessionId: "s", requestId: "1", optionId: null })).type,
+    "permission_answer",
+  );
 });
 
 test("rejects wrong types, missing fields and unknown message types", () => {

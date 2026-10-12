@@ -2,7 +2,7 @@
 // A stand-in for the `openshell` CLI with a scripted ACP agent, for trying the
 // console without a gateway and for the bridge test:
 //
-//   OPENSHELL_BIN=test/fake-openshell.mjs npm run serve
+//   OPENSHELL_BIN=test/fixtures/fake-openshell.mjs npm run serve
 //
 // Prompts containing "fail" return a JSON-RPC error; "exit" makes the agent exit;
 // anything else plays a turn with a plan, an edit with a diff, a permission
@@ -10,11 +10,17 @@
 import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
-const out = (o) => process.stdout.write(JSON.stringify(o, null, 2) + "\n");
+const out = (o) => process.stdout.write(`${JSON.stringify(o, null, 2)}\n`);
 const SANDBOXES = [
   { id: "1", name: "opencode-demo", phase: "Ready", created_at: "2026-10-11 05:20:23", conditions: [{ type: "Ready", status: "True" }] },
   { id: "2", name: "claude-demo", phase: "Ready", created_at: "2026-10-11 05:35:31", conditions: [{ type: "Ready", status: "True" }] },
-  { id: "3", name: "broken", phase: "Error", created_at: "2026-10-10 06:43:24", conditions: [{ type: "Ready", status: "False", message: "Canonical main process exited with status 137" }] },
+  {
+    id: "3",
+    name: "broken",
+    phase: "Error",
+    created_at: "2026-10-10 06:43:24",
+    conditions: [{ type: "Ready", status: "False", message: "Canonical main process exited with status 137" }],
+  },
 ];
 
 const [a, b] = args;
@@ -64,7 +70,7 @@ else if (a === "sandbox" && b === "get") {
 }
 
 function agent() {
-  const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\n");
+  const send = (m) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...m })}\n`);
   const pending = new Map();
   let nextId = 100;
   let cancelled = false;
@@ -78,7 +84,9 @@ function agent() {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let model = "openrouter/nvidia/nemotron-3.5-lightning:free";
   const models = ["openrouter/nvidia/nemotron-3.5-lightning:free", "openrouter/anthropic/claude-fable-5.1", "openrouter/openrouter/auto"];
-  const config = () => [{ id: "model", name: "Model", category: "model", type: "select", currentValue: model, options: models.map((value) => ({ value, name: value })) }];
+  const config = () => [
+    { id: "model", name: "Model", category: "model", type: "select", currentValue: model, options: models.map((value) => ({ value, name: value })) },
+  ];
 
   async function turn(id, sessionId, text) {
     cancelled = false;
@@ -93,44 +101,106 @@ function agent() {
         await sleep(25);
       }
     };
-    update(sessionId, { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "The user wants a health endpoint. I'll read server.py first." } });
-    const plan = (s) => update(sessionId, { sessionUpdate: "plan", entries: [
-      { content: "Read server.py", status: s > 0 ? "completed" : "in_progress", priority: "high" },
-      { content: "Add the /health route", status: s > 1 ? "completed" : s === 1 ? "in_progress" : "pending", priority: "high" },
-      { content: "Run the tests", status: s > 2 ? "completed" : s === 2 ? "in_progress" : "pending", priority: "medium" },
-    ] });
+    update(sessionId, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "The user wants a health endpoint. I'll read server.py first." },
+    });
+    const plan = (s) =>
+      update(sessionId, {
+        sessionUpdate: "plan",
+        entries: [
+          { content: "Read server.py", status: s > 0 ? "completed" : "in_progress", priority: "high" },
+          { content: "Add the /health route", status: s > 1 ? "completed" : s === 1 ? "in_progress" : "pending", priority: "high" },
+          { content: "Run the tests", status: s > 2 ? "completed" : s === 2 ? "in_progress" : "pending", priority: "medium" },
+        ],
+      });
     plan(0);
-    update(sessionId, { sessionUpdate: "tool_call", toolCallId: "r1", title: "server.py", kind: "read", status: "in_progress", locations: [{ path: "/sandbox/myrepo/server.py" }] });
+    update(sessionId, {
+      sessionUpdate: "tool_call",
+      toolCallId: "r1",
+      title: "server.py",
+      kind: "read",
+      status: "in_progress",
+      locations: [{ path: "/sandbox/myrepo/server.py" }],
+    });
     await sleep(300);
-    update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "r1", status: "completed", content: [{ type: "content", content: { type: "text", text: "142 lines" } }] });
+    update(sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "r1",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "142 lines" } }],
+    });
     // Must be refused: the console advertises no fs capability.
     const fs = await request("fs/read_text_file", { sessionId, path: "/etc/passwd" });
     plan(1);
-    update(sessionId, { sessionUpdate: "tool_call", toolCallId: "e1", title: "server.py", kind: "edit", status: "in_progress", locations: [{ path: "/sandbox/myrepo/server.py" }] });
+    update(sessionId, {
+      sessionUpdate: "tool_call",
+      toolCallId: "e1",
+      title: "server.py",
+      kind: "edit",
+      status: "in_progress",
+      locations: [{ path: "/sandbox/myrepo/server.py" }],
+    });
     await sleep(300);
-    update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "e1", status: "completed", content: [{ type: "diff", path: "/sandbox/myrepo/server.py",
-      oldText: "import time\n\napp = App()\n",
-      newText: 'import time\n\napp = App()\n\n@app.get("/health")\ndef health():\n    return {"commit": GIT_SHA, "uptime_s": int(time.monotonic() - STARTED)}\n' }] });
+    update(sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "e1",
+      status: "completed",
+      content: [
+        {
+          type: "diff",
+          path: "/sandbox/myrepo/server.py",
+          oldText: "import time\n\napp = App()\n",
+          newText:
+            'import time\n\napp = App()\n\n@app.get("/health")\ndef health():\n    return {"commit": GIT_SHA, "uptime_s": int(time.monotonic() - STARTED)}\n',
+        },
+      ],
+    });
     plan(2);
-    await chunk(`The route is in place (and my fs request was ${fs.error ? `refused with ${fs.error.code}` : "ANSWERED, which is wrong"}). I'd like to run the tests.\n\n`);
-    update(sessionId, { sessionUpdate: "tool_call", toolCallId: "x1", title: "pytest -q tests/test_health.py", kind: "execute", status: "pending", rawInput: { command: "pytest -q tests/test_health.py" } });
-    const perm = await request("session/request_permission", { sessionId, toolCall: { toolCallId: "x1" }, options: [
-      { optionId: "once", name: "Allow once", kind: "allow_once" },
-      { optionId: "always", name: "Always allow pytest", kind: "allow_always" },
-      { optionId: "reject", name: "Reject", kind: "reject_once" },
-    ] });
+    await chunk(
+      `The route is in place (and my fs request was ${fs.error ? `refused with ${fs.error.code}` : "ANSWERED, which is wrong"}). I'd like to run the tests.\n\n`,
+    );
+    update(sessionId, {
+      sessionUpdate: "tool_call",
+      toolCallId: "x1",
+      title: "pytest -q tests/test_health.py",
+      kind: "execute",
+      status: "pending",
+      rawInput: { command: "pytest -q tests/test_health.py" },
+    });
+    const perm = await request("session/request_permission", {
+      sessionId,
+      toolCall: { toolCallId: "x1" },
+      options: [
+        { optionId: "once", name: "Allow once", kind: "allow_once" },
+        { optionId: "always", name: "Always allow pytest", kind: "allow_always" },
+        { optionId: "reject", name: "Reject", kind: "reject_once" },
+      ],
+    });
     if (cancelled || perm.result?.outcome?.outcome === "cancelled") return send({ id, result: { stopReason: "cancelled" } });
     if (perm.result.outcome.optionId === "reject") {
-      update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "x1", status: "failed", content: [{ type: "content", content: { type: "text", text: "Rejected by the user" } }] });
+      update(sessionId, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "x1",
+        status: "failed",
+        content: [{ type: "content", content: { type: "text", text: "Rejected by the user" } }],
+      });
       await chunk("OK, I won't run the tests.");
       return send({ id, result: { stopReason: "end_turn" } });
     }
     update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "x1", status: "in_progress" });
     await sleep(1200);
     if (cancelled) return send({ id, result: { stopReason: "cancelled" } });
-    update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "x1", status: "completed", content: [{ type: "content", content: { type: "text", text: "..                                     [100%]\n2 passed in 0.31s" } }] });
+    update(sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "x1",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "..                                     [100%]\n2 passed in 0.31s" } }],
+    });
     plan(3);
-    await chunk("Both tests pass. The endpoint returns the commit from `GIT_SHA` and the uptime in seconds:\n\n```python\n@app.get(\"/health\")\ndef health(): ...\n```\n<script>alert('raw html must not run')</script>");
+    await chunk(
+      "Both tests pass. The endpoint returns the commit from `GIT_SHA` and the uptime in seconds:\n\n```python\n@app.get(\"/health\")\ndef health(): ...\n```\n<script>alert('raw html must not run')</script>",
+    );
     update(sessionId, { sessionUpdate: "usage_update", used: 14200, size: 200000 });
     send({ id, result: { stopReason: cancelled ? "cancelled" : "end_turn", usage: { inputTokens: 12000, outputTokens: 2200, totalTokens: 14200 } } });
   }
@@ -145,11 +215,28 @@ function agent() {
     const p = m.params ?? {};
     switch (m.method) {
       case "initialize":
-        return send({ id: m.id, result: { protocolVersion: 1, agentInfo: { name: "FakeCode", version: "0.0.1" }, agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } } } });
+        return send({
+          id: m.id,
+          result: {
+            protocolVersion: 1,
+            agentInfo: { name: "FakeCode", version: "0.0.1" },
+            agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
+          },
+        });
       case "session/new": {
         const sessionId = `ses_${Math.random().toString(36).slice(2, 10)}`;
         send({ id: m.id, result: { sessionId, configOptions: config() } });
-        setTimeout(() => update(sessionId, { sessionUpdate: "available_commands_update", availableCommands: [{ name: "init", description: "guided AGENTS.md setup" }, { name: "review", description: "review changes [commit|branch|pr]" }] }), 50);
+        setTimeout(
+          () =>
+            update(sessionId, {
+              sessionUpdate: "available_commands_update",
+              availableCommands: [
+                { name: "init", description: "guided AGENTS.md setup" },
+                { name: "review", description: "review changes [commit|branch|pr]" },
+              ],
+            }),
+          50,
+        );
         return;
       }
       case "session/load":
@@ -157,7 +244,12 @@ function agent() {
         update(p.sessionId, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "An earlier **answer**." } });
         return send({ id: m.id, result: { configOptions: config() } });
       case "session/list":
-        return send({ id: m.id, result: { sessions: [{ sessionId: "ses_old1", cwd: p.cwd, title: "Add a health endpoint", updatedAt: new Date(Date.now() - 3600e3).toISOString() }] } });
+        return send({
+          id: m.id,
+          result: {
+            sessions: [{ sessionId: "ses_old1", cwd: p.cwd, title: "Add a health endpoint", updatedAt: new Date(Date.now() - 3600e3).toISOString() }],
+          },
+        });
       case "session/set_config_option":
         model = p.value;
         return send({ id: m.id, result: { configOptions: config() } });

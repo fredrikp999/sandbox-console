@@ -15,10 +15,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import { extname, join, normalize, sep } from "node:path";
 import { WebSocketServer } from "ws";
+import { Bridge } from "./bridge.ts";
 import { type Bundle, makeBundle } from "./bundle.ts";
 import { ROOT } from "./config.ts";
-import { Console } from "./console.ts";
 import type { CliError } from "./openshell.ts";
+import type { Session } from "./session.ts";
 
 const argv = process.argv.slice(2);
 const flag = (name: string) => argv.includes(name);
@@ -95,16 +96,16 @@ function reply(res: ServerResponse, code: number, body: string, type = "text/pla
   res.end(body);
 }
 
-const app = new Console();
+const bridge = new Bridge();
 
 /** Header values must be Latin-1; branch names come from the sandbox and can be anything. */
 const headerSafe = (v: string) => encodeURIComponent(v);
 
 async function serveBundle(url: URL, res: ServerResponse) {
   const sessionId = url.searchParams.get("sessionId") ?? "";
-  let session;
+  let session: Session;
   try {
-    session = app.sessionFor(sessionId);
+    session = bridge.sessionFor(sessionId);
   } catch (e) {
     return reply(res, 404, JSON.stringify({ message: (e as Error).message }), "application/json");
   }
@@ -117,7 +118,12 @@ async function serveBundle(url: URL, res: ServerResponse) {
     b = await makeBundle(session.sandbox, dir);
   } catch (e) {
     const err = e as CliError;
-    return reply(res, err.message === "Nothing to bundle" ? 409 : 500, JSON.stringify({ message: err.message, detail: err.detail, hint: err.hint }), "application/json");
+    return reply(
+      res,
+      err.message === "Nothing to bundle" ? 409 : 500,
+      JSON.stringify({ message: err.message, detail: err.detail, hint: err.hint }),
+      "application/json",
+    );
   }
   // From here on the local copy is ours to remove, whatever happens.
   res.on("close", () => void b.cleanup());
@@ -132,7 +138,9 @@ async function serveBundle(url: URL, res: ServerResponse) {
       "X-Bundle-Commits": String(b.commits),
       "X-Bundle-Base": headerSafe(b.base),
     });
-    createReadStream(b.path).on("error", () => res.destroy()).pipe(res);
+    createReadStream(b.path)
+      .on("error", () => res.destroy())
+      .pipe(res);
   } catch (e) {
     reply(res, 500, JSON.stringify({ message: `Could not send the bundle: ${(e as Error).message}` }), "application/json");
   }
@@ -160,7 +168,9 @@ function serveStatic(req: IncomingMessage, url: URL, res: ServerResponse) {
     ...SECURITY_HEADERS,
   });
   if (req.method === "HEAD") return void res.end();
-  createReadStream(file).on("error", () => res.destroy()).pipe(res);
+  createReadStream(file)
+    .on("error", () => res.destroy())
+    .pipe(res);
 }
 
 function handle(req: IncomingMessage, res: ServerResponse) {
@@ -204,7 +214,7 @@ server.on("upgrade", (req, socket, head) => {
     socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     return socket.destroy();
   }
-  wss.handleUpgrade(req, socket, head, (ws) => app.attach(ws));
+  wss.handleUpgrade(req, socket, head, (ws) => bridge.attach(ws));
 });
 
 server.on("error", (e: NodeJS.ErrnoException) => {
@@ -220,22 +230,28 @@ server.on("error", (e: NodeJS.ErrnoException) => {
 function openBrowser(url: string) {
   const dir = mkdtempSync(join(tmpdir(), "sandbox-console-"));
   const file = join(dir, "open.html");
-  writeFileSync(file, `<!doctype html><meta charset="utf-8"><title>Sandbox Console</title><script>location.replace(${JSON.stringify(url)})</script>`, { mode: 0o600 });
+  writeFileSync(
+    file,
+    `<!doctype html><meta charset="utf-8"><title>Sandbox Console</title><script>location.replace(${JSON.stringify(url)})</script>`,
+    { mode: 0o600 },
+  );
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
-  spawn(opener, [file], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
+  spawn(opener, [file], { stdio: "ignore", detached: true })
+    .on("error", () => {})
+    .unref();
   setTimeout(() => rmSync(dir, { recursive: true, force: true }), 60_000).unref();
 }
 
 server.listen(PORT, HOST, () => {
-  app.start();
+  bridge.start();
   const url = `http://${HOST}:${DEV ? DEV_PORT : PORT}/#token=${TOKEN}`;
   console.log(`Sandbox Console is running.\n\n  ${url}\n`);
-  if (!app.policy) console.log("note: no policies/vscode-terminal.yaml found; set OPENSHELL_CONFIGS to your openshell-configs checkout.");
+  if (!bridge.policy) console.log("note: no policies/vscode-terminal.yaml found; set OPENSHELL_CONFIGS to your openshell-configs checkout.");
   if (flag("--open") && !flag("--no-open")) openBrowser(url);
 });
 
 const shutdown = () => {
-  app.stop();
+  bridge.stop();
   server.close();
   setTimeout(() => process.exit(0), 500).unref();
 };

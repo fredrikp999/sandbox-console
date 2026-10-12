@@ -1,6 +1,6 @@
 # Sandbox Console
 
-A local web app that lists your OpenShell sandboxes and lets you work with the coding agent in each one over ACP. See [DESIGN.md](DESIGN.md) for the design and [mockup.html](mockup.html) for the mockup.
+A local web app that lists your OpenShell sandboxes and lets you work with the coding agent in each one over ACP. See [docs/DESIGN.md](docs/DESIGN.md) for the design and [docs/mockup.html](docs/mockup.html) for the mockup.
 
 ## Run it
 
@@ -17,7 +17,7 @@ Requires Node 22+, and `openshell` on the PATH with a running gateway. Sandboxes
 ### Try it without a gateway
 
 ```sh
-OPENSHELL_BIN=test/fake-openshell.mjs npm start
+OPENSHELL_BIN=test/fixtures/fake-openshell.mjs npm start
 ```
 
 A fake CLI with a scripted agent. A turn plays a plan, an edit with a diff, a permission request and a refused `fs/*` request. A prompt containing "fail" returns an API error. `claude-demo` shows the missing-adapter error (exit code 127).
@@ -26,7 +26,7 @@ A fake CLI with a scripted agent. A turn plays a plan, an edit with a diff, a pe
 
 | | |
 |---|---|
-| `agents.json` | Agent registry: command, model env, default model, image and provider for "New sandbox", and the hint shown when the command is missing |
+| `server/agents.json` | Agent registry (or point `CONSOLE_AGENTS` at your own file): command, model env, default model, image and provider for "New sandbox", and the hint shown when the command is missing |
 | `CONSOLE_PORT` / `--port` | Default 7801 |
 | `OPENSHELL_BIN` | Default `openshell` |
 | `OPENSHELL_CONFIGS`, `OPENSHELL_POLICY` | Where to find the policy for new sandboxes |
@@ -35,33 +35,46 @@ A fake CLI with a scripted agent. A turn plays a plan, an edit with a diff, a pe
 ## Layout
 
 ```
-server/        the bridge (Node, TypeScript, run with tsx)
-  index.ts       HTTP + WebSocket on 127.0.0.1: token auth, Host and Origin checks, CSP, /api/bundle
-  validate.ts    shape checks for browser messages, sandbox name rules
-  eventlog.ts    keeps the per-session event log bounded without breaking replay
-  console.ts     sandbox polling, agent detection, sessions, browser messages
-  session.ts     one `openshell sandbox exec … <agent>` per sandbox: handshake, event log, permissions
-  rpc.ts         JSON-RPC over stdio (newline-delimited)
-  openshell.ts   CLI wrapper and the `openshell logs` network parser
-  bundle.ts      git bundle out of the sandbox (bundle.sh "out")
+server/              the bridge (Node, TypeScript, run with tsx)
+  index.ts             HTTP + WebSocket on 127.0.0.1: token auth, Host and Origin checks, CSP, /api/bundle
+  bridge.ts            sandbox polling, agent detection, sessions, browser messages
+  session.ts           one `openshell sandbox exec … <agent>` per sandbox: handshake, event log, permissions
+  rpc.ts               JSON-RPC over stdio (newline-delimited)
+  openshell.ts         CLI wrapper and the `openshell logs` network parser
+  bundle.ts            git bundle out of the sandbox (bundle.sh "out")
+  validate.ts          shape checks for browser messages, sandbox name rules
+  eventlog.ts          keeps the per-session event log bounded without breaking replay
+  agents.json          agent registry: which command starts each agent, image and provider
+  config.ts, hints.ts  loads the registry and remembered state; error hints
 shared/protocol.ts   browser <-> bridge messages
-web/src/       React UI (Vite)
-  conversation.ts  folds ACP session/update events into the log
-  store.ts         WebSocket, reconnect + replay, request/response
-test/fake-openshell.mjs
+web/                 React UI (Vite)
+  src/conversation.ts  folds ACP session/update events into the log
+  src/store.ts         WebSocket, reconnect + replay, request/response
+  src/auth.ts          the access token
+  src/components/      Sidebar, Chat, ConversationLog, Composer, ModelPicker, Inspector, …
+  vite.config.ts       UI build and dev server
+test/fixtures/       fake `openshell` CLI with a scripted agent
+docs/                DESIGN.md and the clickable mockup
 ```
+
+Tests (`*.test.ts`) sit next to the code they test.
 
 ## Development
 
 ```sh
+npm run check       # typecheck + lint + tests: what CI runs (plus the build)
 npm test            # unit tests + an end-to-end bridge test against the fake CLI
-npm run typecheck
+npm run typecheck   # tsc -b: server/tsconfig.json (bridge), web/tsconfig.json (UI), web/tsconfig.node.json (UI tests, Vite config)
+npm run lint        # Biome: lint, formatting and import order
+npm run format      # Biome: fix what it can
 npm run dev & npm run dev:web    # bridge with --dev, plus Vite on :5173 with hot reload
 ```
 
+Formatting and linting use [Biome](https://biomejs.dev) (`biome.jsonc`). typescript-eslint doesn't support TypeScript 7 yet. CI (`.github/workflows/ci.yml`) runs on every push and pull request.
+
 ## How it follows the design, and where it differs
 
-- **Browser ↔ bridge protocol** is the one in DESIGN.md section 7, with these changes:
+- **Browser ↔ bridge protocol** is the one in [DESIGN.md](docs/DESIGN.md) section 7, with these changes:
   - Every session event (`event`, `user_message`, `permission_request`, `permission_resolved`, `turn_end`, `session_error`, `session_closed`, …) carries a `seq`, so `subscribe {sessionId, sinceSeq}` replays all of them, not only `session/update`.
   - The user's own prompts are logged too, because ACP doesn't echo them.
   - Errors that belong in the conversation are `session_error`, so they can't be confused with replies to requests (`error` with a `reqId`).

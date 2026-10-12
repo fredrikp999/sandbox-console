@@ -2,6 +2,9 @@
 // Same rules as acp_client.py.
 import type { AgentConfig } from "./config.ts";
 
+/** An error with what the UI shows next to the message: CLI output and how to fix it. */
+export type Explained = Error & { detail?: string; hint?: string; reqId?: string };
+
 export function exitHint(code: number | null, tail: string[], agent: AgentConfig): string | undefined {
   const low = tail.join("\n").toLowerCase();
   if (code === 127 || /command not found|no such file|executable file not found/.test(low)) {

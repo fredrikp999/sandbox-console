@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionEvent } from "../../shared/protocol.ts";
-import { fold, permissionSubject, type PermissionItem, type ToolItem } from "./conversation.ts";
+import { fold, type PermissionItem, permissionSubject, type ToolItem } from "./conversation.ts";
 
 let seq = 0;
 const ev = (e: any): SessionEvent => ({ sessionId: "s", seq: ++seq, ts: 1000 * seq, ...e });
@@ -42,7 +42,7 @@ test("merges tool updates, keeps rawInput, tracks duration and diff line counts 
   const t = c.items[0] as ToolItem;
   assert.equal(c.items.length, 1);
   assert.equal(t.status, "completed");
-  assert.equal(t.rawInput.filePath, "/sandbox/a.py");
+  assert.equal(t.rawInput?.filePath, "/sandbox/a.py");
   assert.equal(t.endedAt! - t.startedAt, 2000);
   assert.deepEqual([c.files["/sandbox/a.py"].added, c.files["/sandbox/a.py"].removed], [2, 0]);
 });
@@ -58,10 +58,15 @@ test("edits without a diff still list the file", () => {
 test("permission card describes the command and resolves to a grey line", () => {
   const c = fold([
     up({ sessionUpdate: "tool_call", toolCallId: "b", title: "bash", kind: "execute", status: "pending", rawInput: { command: "pytest -q" } }),
-    ev({ type: "permission_request", requestId: "1", toolCall: { toolCallId: "b" }, options: [
-      { optionId: "once", name: "Allow once", kind: "allow_once" },
-      { optionId: "always", name: "Always allow", kind: "allow_always" },
-    ] }),
+    ev({
+      type: "permission_request",
+      requestId: "1",
+      toolCall: { toolCallId: "b" },
+      options: [
+        { optionId: "once", name: "Allow once", kind: "allow_once" },
+        { optionId: "always", name: "Always allow", kind: "allow_always" },
+      ],
+    }),
     ev({ type: "permission_resolved", requestId: "1", optionId: "always", label: "Always allow" }),
   ]);
   const p = c.items[1] as PermissionItem;
@@ -71,6 +76,14 @@ test("permission card describes the command and resolves to a grey line", () => 
 });
 
 test("reports non-normal stop reasons only", () => {
-  const c = fold([ev({ type: "turn_start" }), ev({ type: "turn_end", stopReason: "end_turn" }), ev({ type: "turn_start" }), ev({ type: "turn_end", stopReason: "cancelled" })]);
-  assert.deepEqual(c.items.map((i) => i.kind), ["turn_end"]);
+  const c = fold([
+    ev({ type: "turn_start" }),
+    ev({ type: "turn_end", stopReason: "end_turn" }),
+    ev({ type: "turn_start" }),
+    ev({ type: "turn_end", stopReason: "cancelled" }),
+  ]);
+  assert.deepEqual(
+    c.items.map((i) => i.kind),
+    ["turn_end"],
+  );
 });
