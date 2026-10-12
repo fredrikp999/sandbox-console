@@ -174,3 +174,7 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
 ## Limitations
 - **Sessions are kept in memory.** They survive closing the tab, not restarting the bridge. Use "Earlier sessions" to get back to them.
 - **Long-running sessions** (hours, gateway restarts) are untested. When the agent process dies, the console shows its exit code and last output, and offers to start a new session.
+
+## License
+
+[MIT](LICENSE)

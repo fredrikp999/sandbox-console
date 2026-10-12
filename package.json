@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Local web console for coding agents in OpenShell sandboxes, over ACP",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/fredrikp999/sandbox-console.git"
