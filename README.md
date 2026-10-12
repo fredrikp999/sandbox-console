@@ -1,38 +1,136 @@
 # Sandbox Console
 
-A local web app that lists your OpenShell sandboxes and lets you work with the coding agent in each one over ACP. See [docs/DESIGN.md](docs/DESIGN.md) for the design and [docs/mockup.html](docs/mockup.html) for the mockup.
+A local web app for the coding agents in your [OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes. It lists your sandboxes and lets you chat with the agent in each one over [ACP](https://agentclientprotocol.com) (Agent Client Protocol). The agent stays inside its sandbox. The console shows what it does and asks you before it acts.
 
-## Run it
+- **All sandboxes at a glance:** each one shows whether its agent is working, waiting for you, or idle. Sandboxes waiting for you sort to the top.
+- **Chat:** streamed replies, the agent's plan, its thinking, and a card for each tool call, with diffs for edits.
+- **Approvals:** permission requests appear as cards. You answer with the agent's own options, each labelled with what it actually does.
+- **Models and commands:** a searchable model picker (OpenRouter offers about 400 models) and a `/` menu with the agent's commands.
+- **Sessions keep running** when you close the tab, and the conversation is replayed when you come back. Earlier sessions can be reopened.
+- **Review:** files changed, hosts the sandbox reached or was denied, and the agent's commits downloaded as a git bundle.
+
+The design is in [docs/DESIGN.md](docs/DESIGN.md), and [docs/mockup.html](docs/mockup.html) is a clickable mockup.
+
+## Requirements
+
+- Node 22 or later.
+- `openshell` on your PATH, with a running gateway (`openshell status`).
+- Sandboxes, images and providers set up with [openshell-configs](https://github.com/fredrikp999/openshell-configs): the `opencode-sandbox` image with the `openrouter` provider, and/or `claude-sandbox` with `claude`.
+
+## Quick start
 
 ```sh
-./console.sh            # installs, builds the UI if needed, starts the bridge and opens the browser
-./console.sh --port 7900 --no-open
-npm start               # same, without opening the browser
+git clone https://github.com/fredrikp999/sandbox-console.git
+cd sandbox-console
+./console.sh
 ```
 
-The bridge prints `http://127.0.0.1:7801/#token=…`. The token is new on every start. The page moves it out of the address bar into `localStorage`, so reloads and new tabs work, but after a restart you need the new URL. `--open` passes the URL to the browser through a private temporary file, so the token never appears on a command line.
+`./console.sh` installs dependencies when they've changed, builds the UI, starts the bridge on `127.0.0.1:7801` and opens the console in your browser. It prints the address too:
 
-Requires Node 22+, and `openshell` on the PATH with a running gateway. Sandboxes come from [openshell-configs](https://github.com/fredrikp999/openshell-configs). Set `OPENSHELL_CONFIGS` to that checkout so new sandboxes get `policies/vscode-terminal.yaml`, like `sandbox.sh`. The console also looks in `~/openshell-configs/openshell-configs`.
+```
+Sandbox Console is running.
+
+  http://127.0.0.1:7801/#token=…
+```
+
+The token is new each time the bridge starts. The page moves it out of the address bar and keeps it in the browser, so reloads and new tabs work. After a restart, open the new address.
+
+Other ways to start it:
+
+```sh
+./console.sh --port 7900 --no-open   # another port, don't open the browser
+npm start                            # build and start, don't open the browser
+```
 
 ### Try it without a gateway
 
 ```sh
-OPENSHELL_BIN=test/fixtures/fake-openshell.mjs npm start
+OPENSHELL_BIN=test/fixtures/fake-openshell.mjs ./console.sh
 ```
 
-A fake CLI with a scripted agent. A turn plays a plan, an edit with a diff, a permission request and a refused `fs/*` request. A prompt containing "fail" returns an API error. `claude-demo` shows the missing-adapter error (exit code 127).
+This uses a fake `openshell` with a scripted agent:
+- **Normal prompt:** the agent shows a plan, makes an edit with a diff, asks permission to run a command, and makes a host file request that the console refuses.
+- **Prompt containing "fail":** the agent returns an API error, so you can see how errors are shown.
+- **`claude-demo`:** shows the error for an image without the ACP adapter.
+
+## Using it
+
+**Sandboxes (left).** Click a sandbox to open it.
+- **No agent session yet:** pick the agent if the console can't tell which one the sandbox has, then the working directory, then **Start session**.
+- **New sandbox:** creates one the same way `sandbox.sh` does: it runs `sleep infinity`, gets the openshell-configs policy, and stays around until you delete it.
+
+**Conversation (middle).**
+
+| Key | |
+|---|---|
+| <kbd>Enter</kbd> | send |
+| <kbd>Shift</kbd>+<kbd>Enter</kbd> | new line |
+| <kbd>Esc</kbd> | stop the agent |
+| <kbd>/</kbd> | command menu |
+
+The `/` menu has the agent's own commands (OpenCode: `/init`, `/review`, …) and three console commands:
+
+| Command | |
+|---|---|
+| `/model [search]` | switch model for this session |
+| `/bundle [dir]` | download the agent's commits as a git bundle |
+| `/clear` | start a new session in this sandbox |
+
+Anything else starting with `/` isn't sent, because it would reach the model as plain text. Start with a space to send it anyway.
+
+**Permission cards.** When the agent asks before acting, answer with one of its options. Each button also shows what it does ("allows once", "allows always", "rejects"), because the label is the agent's own text. Stop (<kbd>Esc</kbd>) answers an open request with "cancelled".
+
+**Session (right).**
+- **Details:** the agent command, directory, session id and token usage.
+- **Files changed:** click a file to jump to its edit.
+- **Download as git bundle:** see below.
+- **Network this session:** from `openshell logs`.
+- **Earlier sessions:** reopen one with `session/load`.
+- **Stop the agent process** and **Delete sandbox**.
+
+**Getting code out.** Have the agent commit, then use **Download as git bundle** (or `/bundle <dir>`).
+- **What's in it:** the commits on the current branch of the session's directory that aren't in `host/main` or `host/master`. Those branches exist when the repo came in through openshell-configs' `bundle.sh in`; without them, the whole branch.
+- **Taking it into your repo:** `git fetch <file> <branch>:<branch>`, then review before you push.
 
 ## Configuration
 
-| | |
+| Setting | |
 |---|---|
-| `server/agents.json` | Agent registry (or point `CONSOLE_AGENTS` at your own file): command, model env, default model, image and provider for "New sandbox", and the hint shown when the command is missing |
-| `CONSOLE_PORT` / `--port` | Default 7801 |
-| `OPENSHELL_BIN` | Default `openshell` |
-| `OPENSHELL_CONFIGS`, `OPENSHELL_POLICY` | Where to find the policy for new sandboxes |
-| `CONSOLE_STATE` | Agent, directory and model remembered per sandbox. Default `~/.config/sandbox-console/state.json` |
+| `server/agents.json` | Agent registry: the command that starts each agent in ACP mode, how its model is chosen, default model, image and provider for "New sandbox", and the hint shown when the command is missing. `CONSOLE_AGENTS` points at another file. |
+| `CONSOLE_PORT`, `--port` | Port on 127.0.0.1. Default 7801. |
+| `OPENSHELL_BIN` | The `openshell` CLI. Default `openshell` on the PATH. |
+| `OPENSHELL_CONFIGS` | Your openshell-configs checkout. New sandboxes get its `policies/vscode-terminal.yaml`. Also looked for in `~/openshell-configs/openshell-configs`. |
+| `OPENSHELL_POLICY` | A policy file for new sandboxes, instead of the one above. |
+| `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. |
+| `CONSOLE_TOKEN` | A fixed access token instead of a random one (at least 8 characters of `A-Z a-z 0-9 _ -`). Mainly for scripting and tests. |
 
-## Layout
+## Security
+
+- **Nothing runs on your machine for the agent.** The console offers the agent no file or terminal access on the host, and refuses such requests (`-32601`). The agent works only inside its sandbox, under its network policy, with credentials that stay in the OpenShell gateway.
+- **Only you can drive it.**
+  - **Network:** the bridge listens on 127.0.0.1 only.
+  - **Token:** every request needs the token, sent as a WebSocket subprotocol and as a `Bearer` header, never as a cookie. Cookies are shared by every port on 127.0.0.1, so any other local server could read one.
+  - **Headers:** `Host` and `Origin` are checked.
+  - **`--open`:** hands the address to the browser through a private file, so other users can't read the token from the process list.
+- **Agent output is untrusted.** It's rendered as Markdown without HTML or remote images, under a strict Content Security Policy. Sandbox names and other input from the browser are checked before they reach the `openshell` CLI.
+- **Code leaves the sandbox only as git bundles you review.**
+
+## Development
+
+```sh
+npm run check       # typecheck + lint + tests (CI also runs the build)
+npm test            # unit tests + an end-to-end bridge test against the fake CLI
+npm run typecheck   # tsc -b over server/, web/ and the UI tests
+npm run lint        # Biome: lint, formatting and import order
+npm run format      # Biome: fix what it can
+npm run dev & npm run dev:web    # bridge with --dev, plus Vite on :5173 with hot reload
+```
+
+- **Formatting and linting:** [Biome](https://biomejs.dev) (`biome.jsonc`). typescript-eslint doesn't support TypeScript 7 yet.
+- **CI:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request.
+- **Tests:** `*.test.ts` files sit next to the code they test.
+
+### Layout
 
 ```
 server/              the bridge (Node, TypeScript, run with tsx)
@@ -44,7 +142,7 @@ server/              the bridge (Node, TypeScript, run with tsx)
   bundle.ts            git bundle out of the sandbox (bundle.sh "out")
   validate.ts          shape checks for browser messages, sandbox name rules
   eventlog.ts          keeps the per-session event log bounded without breaking replay
-  agents.json          agent registry: which command starts each agent, image and provider
+  agents.json          agent registry
   config.ts, hints.ts  loads the registry and remembered state; error hints
 shared/protocol.ts   browser <-> bridge messages
 web/                 React UI (Vite)
@@ -54,23 +152,10 @@ web/                 React UI (Vite)
   src/components/      Sidebar, Chat, ConversationLog, Composer, ModelPicker, Inspector, …
   vite.config.ts       UI build and dev server
 test/fixtures/       fake `openshell` CLI with a scripted agent
-docs/                DESIGN.md and the clickable mockup
+docs/                design and mockup
 ```
 
-Tests (`*.test.ts`) sit next to the code they test.
-
-## Development
-
-```sh
-npm run check       # typecheck + lint + tests: what CI runs (plus the build)
-npm test            # unit tests + an end-to-end bridge test against the fake CLI
-npm run typecheck   # tsc -b: server/tsconfig.json (bridge), web/tsconfig.json (UI), web/tsconfig.node.json (UI tests, Vite config)
-npm run lint        # Biome: lint, formatting and import order
-npm run format      # Biome: fix what it can
-npm run dev & npm run dev:web    # bridge with --dev, plus Vite on :5173 with hot reload
-```
-
-Formatting and linting use [Biome](https://biomejs.dev) (`biome.jsonc`). typescript-eslint doesn't support TypeScript 7 yet. CI (`.github/workflows/ci.yml`) runs on every push and pull request.
+TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web/tsconfig.json` (DOM, no Node) and `web/tsconfig.node.json` (UI tests and Vite config). They share the options in the root `tsconfig.json`.
 
 ## How it follows the design, and where it differs
 
@@ -82,13 +167,10 @@ Formatting and linting use [Biome](https://biomejs.dev) (`biome.jsonc`). typescr
 - **One agent process per sandbox.** `/clear` runs `session/new` and "Earlier sessions" runs `session/load` on the same process.
 - **Agent detection** (open question: does `sandbox get` show the image?). It doesn't, but its policy lists the provider (`_provider_openrouter` means OpenCode). After that the console falls back to the name prefix, then to what you chose before.
 - **Network view** (open question: are denials in `openshell logs`?). They are. `NET:OPEN … ALLOWED|DENIED <binary> -> host:port` lines are counted from the time the agent process started, and refreshed every 15 s.
-- **Token usage**: OpenCode sends `usage_update` (context used and size), and the `session/prompt` result includes cumulative `usage`. Both are shown.
+- **Token usage:** OpenCode sends `usage_update` (context used and size), and the `session/prompt` result includes cumulative `usage`. Both are shown.
 - **Fonts are bundled** (`@fontsource`) rather than loaded from Google, so the UI works offline and the CSP stays `'self'`.
 - **The diff view** is a small jsdiff-based component instead of `react-diff-view`.
 
-## Not done yet
-
-- Claude Code runs `claude-acp-start`, the wrapper in the `claude-sandbox` image that skips onboarding and then starts the ACP adapter `claude-agent-acp`. Sandboxes from images built before the adapter was added fail with exit 127, and the console shows a rebuild hint.
-- The event log lives in memory: sessions survive closing the tab, not restarting the bridge. Use "Earlier sessions" (`session/load`) to get back to them.
-- "Download as git bundle" bundles the current branch of the session's working directory, compared with `host/main` or `host/master` when the repo came in through `bundle.sh in`. Choose another directory with `/bundle <dir>`.
-- Long-running exec stability (hours, gateway restarts) is untested. When the process dies, the console shows the exit code and stderr, and offers to start a new session.
+## Limitations
+- **Sessions are kept in memory.** They survive closing the tab, not restarting the bridge. Use "Earlier sessions" to get back to them.
+- **Long-running sessions** (hours, gateway restarts) are untested. When the agent process dies, the console shows its exit code and last output, and offers to start a new session.

@@ -8,6 +8,10 @@
 # its policies/vscode-terminal.yaml when it creates sandboxes.
 set -eu
 cd "$(dirname "$0")"
-[ -d node_modules ] || npm install
-[ -f dist/web/index.html ] || npm run build
+# Install when dependencies changed (e.g. after a git pull), and always rebuild
+# the UI, so it never runs stale. Both are quick when nothing changed.
+if [ ! -f node_modules/.package-lock.json ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
+  npm install
+fi
+npm run build --silent >/dev/null
 exec npx tsx server/index.ts --open "$@"
