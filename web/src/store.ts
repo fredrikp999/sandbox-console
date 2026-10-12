@@ -24,8 +24,10 @@ export interface State {
   listError?: string;
   gateway: GatewayStatus | null;
   sessions: Record<string, SessionView>;
-  /** The thread shown per sandbox. */
+  /** The thread shown per sandbox (always one that is open). */
   bySandbox: Record<string, string>;
+  /** Threads with a tab. The others are listed in the sidebar and opened from there. */
+  open: Record<string, true>;
   selected: string | null;
 }
 
@@ -44,6 +46,16 @@ export class RequestError extends Error {
 // Before anything reads the URL: take the token out of it.
 initToken();
 
+const OPEN_KEY = "sandbox-console-open-threads";
+
+function loadOpen(): Record<string, true> {
+  try {
+    return Object.fromEntries((JSON.parse(localStorage.getItem(OPEN_KEY) ?? "[]") as string[]).map((id) => [id, true as const]));
+  } catch {
+    return {};
+  }
+}
+
 const initialSelected = () => new URLSearchParams(location.hash.slice(1)).get("sb") || null;
 
 class Store {
@@ -54,6 +66,7 @@ class Store {
     gateway: null,
     sessions: {},
     bySandbox: {},
+    open: loadOpen(),
     selected: initialSelected(),
   };
   private listeners = new Set<() => void>();
@@ -146,9 +159,40 @@ class Store {
     this.set({ selected: name });
   }
 
-  /** Show a thread of a sandbox. */
+  /** Show a thread of a sandbox (opening its tab if it has none). */
   activate(sandbox: string, sessionId: string) {
-    this.set((s) => (s.sessions[sessionId] ? { bySandbox: { ...s.bySandbox, [sandbox]: sessionId } } : {}));
+    this.set((s) =>
+      s.sessions[sessionId] ? { open: this.remember({ ...s.open, [sessionId]: true }), bySandbox: { ...s.bySandbox, [sandbox]: sessionId } } : {},
+    );
+  }
+
+  /** Close a thread's tab. The thread itself stays, on the bridge and in the sidebar. */
+  close(sandbox: string, sessionId: string) {
+    this.set((s) => {
+      const { [sessionId]: _closed, ...open } = s.open;
+      return { open: this.remember(open), bySandbox: this.afterRemoval(s, sandbox, sessionId, open) };
+    });
+  }
+
+  private remember(open: Record<string, true>) {
+    try {
+      localStorage.setItem(OPEN_KEY, JSON.stringify(Object.keys(open)));
+    } catch {
+      /* storage unavailable */
+    }
+    return open;
+  }
+
+  /** If the thread shown was removed, show another open one of its sandbox, if any. */
+  private afterRemoval(s: State, sandbox: string, gone: string, open: Record<string, true>) {
+    if (s.bySandbox[sandbox] !== gone) return s.bySandbox;
+    const bySandbox = { ...s.bySandbox };
+    const next = Object.values(s.sessions)
+      .filter((x) => x.info.sandbox === sandbox && x.info.sessionId !== gone && open[x.info.sessionId])
+      .sort((a, b) => b.info.startedAt - a.info.startedAt)[0];
+    if (next) bySandbox[sandbox] = next.info.sessionId;
+    else delete bySandbox[sandbox];
+    return bySandbox;
   }
 
   private settle(m: ServerMessage & { reqId?: string }) {
@@ -165,18 +209,24 @@ class Store {
   private track(s: State, info: SessionInfo, activate: boolean): State {
     const prev = s.sessions[info.sessionId];
     const sessions = { ...s.sessions };
-    if (prev) sessions[info.sessionId] = { ...prev, info };
-    else {
-      // A live thread means a fresh agent process: the old, dead one's threads are gone from the bridge.
-      if (info.state !== "dead") {
-        for (const [id, v] of Object.entries(sessions)) if (v.info.sandbox === info.sandbox && v.info.state === "dead") delete sessions[id];
+    // New live threads get a tab; saved ones only if they had one before.
+    const isOpen = s.open[info.sessionId] || activate || (!prev && info.state !== "dead");
+    const open = isOpen && !s.open[info.sessionId] ? this.remember({ ...s.open, [info.sessionId]: true }) : s.open;
+    if (prev) {
+      sessions[info.sessionId] = { ...prev, info };
+      // A saved thread that was resumed: the bridge now publishes its new events.
+      if (prev.info.state === "dead" && info.state !== "dead") {
+        queueMicrotask(() => this.trySend({ type: "subscribe", sessionId: info.sessionId, sinceSeq: prev.lastSeq }));
       }
+    } else {
       sessions[info.sessionId] = { info, conv: emptyConversation(), lastSeq: 0, replayed: false };
       queueMicrotask(() => this.trySend({ type: "subscribe", sessionId: info.sessionId, sinceSeq: 0 }));
     }
     const current = s.bySandbox[info.sandbox];
-    const bySandbox = activate || !current || !sessions[current] ? { ...s.bySandbox, [info.sandbox]: info.sessionId } : s.bySandbox;
-    return { ...s, sessions, bySandbox };
+    // A live thread replaces an exited one as the thread shown.
+    const replaces = !current || !sessions[current] || (sessions[current].info.state === "dead" && info.state !== "dead");
+    const bySandbox = activate || (isOpen && replaces) ? { ...s.bySandbox, [info.sandbox]: info.sessionId } : s.bySandbox;
+    return { ...s, sessions, bySandbox, open };
   }
 
   private trySend(msg: ClientMessage) {
@@ -218,6 +268,15 @@ class Store {
       case "session_info":
         if (!m.session.sessionId) return s;
         return this.track(s, m.session, false);
+      case "thread_deleted": {
+        this.settle(m);
+        const v = s.sessions[m.sessionId];
+        if (!v) return s;
+        const { [m.sessionId]: _gone, ...sessions } = s.sessions;
+        const { [m.sessionId]: _closed, ...open } = s.open;
+        const bySandbox = this.afterRemoval({ ...s, sessions }, v.info.sandbox, m.sessionId, open);
+        return { ...s, sessions, bySandbox, open: this.remember(open) };
+      }
       case "replay_done": {
         const v = s.sessions[m.sessionId];
         return v ? { ...s, sessions: { ...s.sessions, [m.sessionId]: { ...v, replayed: true } } } : s;

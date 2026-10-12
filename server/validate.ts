@@ -12,6 +12,8 @@ const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   open_session: { reqId: "s", sandbox: "s", agent: "s", cwd: "s", model: "s?", loadSessionId: "s?" },
   new_thread: { reqId: "s", sandbox: "s" },
   close_session: { sessionId: "s" },
+  delete_thread: { reqId: "s", sessionId: "s" },
+  delete_threads: { reqId: "s", sandbox: "s" },
   list_past_sessions: { reqId: "s", sessionId: "s" },
   prompt: { sessionId: "s", text: "s" },
   cancel: { sessionId: "s" },

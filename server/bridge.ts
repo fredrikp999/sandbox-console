@@ -1,11 +1,13 @@
 // The bridge's core: polls OpenShell for sandboxes, owns the agent sessions and
 // handles messages from the browser tabs.
+import { dirname, join } from "node:path";
 import type { WebSocket } from "ws";
 import type { AgentId, ClientMessage, GatewayStatus, NetworkHost, SandboxRow, ServerMessage } from "../shared/protocol.ts";
 import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
 import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
 import { Session, type SessionHost, type Thread } from "./session.ts";
+import { type StoredThread, ThreadStore } from "./threadstore.ts";
 import { NEW_SANDBOX_NAME, parseClientMessage, SANDBOX_NAME } from "./validate.ts";
 
 const LIST_EVERY = 3_000;
@@ -24,6 +26,9 @@ export class Bridge implements SessionHost {
   readonly agents = loadAgents();
   readonly state = new StateStore();
   readonly policy = findPolicy();
+  private threadStore = new ThreadStore(join(dirname(this.state.file), "threads"));
+  /** Saved threads that no agent process has loaded since the bridge started (or the process exited). Shown as exited. */
+  private archive = new Map<string, StoredThread>(); // by session id
   private tabs = new Set<Tab>();
   private sessions = new Map<string, Session>(); // by sandbox name
   private raw: os.RawSandbox[] = [];
@@ -33,6 +38,13 @@ export class Bridge implements SessionHost {
   private network = new Map<string, { at: number; since: number; result: Promise<NetworkHost[]> }>(); // by sandbox
   private gateway: GatewayStatus = { name: "openshell", status: "unknown" };
   private timers: NodeJS.Timeout[] = [];
+
+  constructor() {
+    for (const t of this.threadStore.loadAll()) {
+      if (!this.threadStore.isDeleted(t.info.sandbox, t.info.sessionId))
+        this.archive.set(t.info.sessionId, { ...t, info: { ...t.info, state: "dead" } });
+    }
+  }
 
   start() {
     const list = () => this.refreshList().catch(() => {});
@@ -45,6 +57,7 @@ export class Bridge implements SessionHost {
   stop() {
     this.timers.forEach(clearInterval);
     for (const s of this.sessions.values()) s.close();
+    this.threadStore.flush();
   }
 
   // ---- tabs
@@ -74,7 +87,10 @@ export class Bridge implements SessionHost {
     this.send(tab, {
       type: "hello",
       agents: [...this.agents.values()].map(agentInfo),
-      sessions: [...this.sessions.values()].flatMap((s) => [...s.threads.values()].map((t) => t.info())),
+      sessions: [
+        ...[...this.sessions.values()].flatMap((s) => [...s.threads.values()].map((t) => t.info())),
+        ...[...this.archive.values()].map((a) => a.info),
+      ],
       canCreate: true,
       createNote: this.policy ? undefined : "No policies/vscode-terminal.yaml found (set OPENSHELL_CONFIGS); new sandboxes get the default policy.",
     });
@@ -106,11 +122,25 @@ export class Bridge implements SessionHost {
     for (const t of this.tabs) if (t.ws.readyState === t.ws.OPEN) t.ws.send(text);
   }
 
-  private bySessionId(id: string): Thread {
+  persist(thread: Thread) {
+    this.threadStore.schedule({ sandbox: thread.sandbox, sessionId: thread.sessionId, read: () => thread.diskSnapshot() });
+  }
+
+  archived(sandbox: string, sessionId: string) {
+    const a = this.archive.get(sessionId);
+    return a?.info.sandbox === sandbox ? a : undefined;
+  }
+
+  private findThread(id: string): Thread | undefined {
     for (const s of this.sessions.values()) {
       const t = s.threads.get(id);
       if (t) return t;
     }
+  }
+
+  private bySessionId(id: string): Thread {
+    const found = this.findThread(id);
+    if (found) return found;
     throw Object.assign(new Error("That session is no longer open."), { hint: "Start a new session from the sandbox list." });
   }
 
@@ -138,6 +168,13 @@ export class Bridge implements SessionHost {
         return;
 
       case "subscribe": {
+        const saved = this.archive.get(msg.sessionId);
+        if (saved) {
+          // Nothing more will happen to it until it is resumed.
+          for (const ev of saved.log) if (ev.seq > msg.sinceSeq) this.send(tab, ev);
+          this.send(tab, { type: "replay_done", sessionId: msg.sessionId, lastSeq: saved.log.at(-1)?.seq ?? msg.sinceSeq });
+          return;
+        }
         const s = this.bySessionId(msg.sessionId);
         for (const ev of s.log) if (ev.seq > msg.sinceSeq) this.send(tab, ev);
         tab.subs.add(s);
@@ -161,6 +198,20 @@ export class Bridge implements SessionHost {
       case "close_session":
         this.bySessionId(msg.sessionId).proc.close();
         return;
+
+      case "delete_thread":
+        if (!this.deleteThread(msg.sessionId, msg.reqId)) throw new Error("That thread is already gone.");
+        this.changed();
+        return;
+
+      case "delete_threads": {
+        const ids = [...this.archive.values()].filter((a) => a.info.sandbox === msg.sandbox).map((a) => a.info.sessionId);
+        ids.push(...(this.sessions.get(msg.sandbox)?.threads.keys() ?? []));
+        for (const id of ids) this.deleteThread(id, msg.reqId);
+        this.send(tab, { type: "result", reqId: msg.reqId, ok: true, message: `Deleted ${ids.length} threads` });
+        this.changed();
+        return;
+      }
 
       case "prompt":
         this.bySessionId(msg.sessionId).prompt(msg.text);
@@ -187,7 +238,9 @@ export class Bridge implements SessionHost {
       case "list_past_sessions": {
         const proc = this.bySessionId(msg.sessionId).proc;
         try {
-          const sessions = (await proc.listPast()).filter((p) => !proc.threads.has(p.sessionId));
+          const sessions = (await proc.listPast()).filter(
+            (p) => !proc.threads.has(p.sessionId) && !this.archive.has(p.sessionId) && !this.threadStore.isDeleted(proc.sandbox, p.sessionId),
+          );
           this.send(tab, { type: "past_sessions", reqId: msg.reqId, sessionId: msg.sessionId, sessions });
         } catch (e) {
           this.send(tab, { type: "past_sessions", reqId: msg.reqId, sessionId: msg.sessionId, sessions: [], error: (e as Error).message });
@@ -222,11 +275,27 @@ export class Bridge implements SessionHost {
         this.sessions.delete(msg.name);
         await os.deleteSandbox(msg.name);
         this.state.forget(msg.name);
+        this.purgeThreads(msg.name);
         this.send(tab, { type: "result", reqId: msg.reqId, ok: true, message: `Deleted ${msg.name}` });
         await this.refreshList();
         return;
       }
     }
+  }
+
+  /** Forget a thread, live or saved. False if there is no such thread. */
+  private deleteThread(sessionId: string, reqId?: string): boolean {
+    const live = this.findThread(sessionId);
+    const sandbox = live?.sandbox ?? this.archive.get(sessionId)?.info.sandbox;
+    if (!sandbox) return false;
+    if (live) {
+      live.proc.dropThread(sessionId);
+      for (const t of this.tabs) t.subs.delete(live);
+    }
+    this.archive.delete(sessionId);
+    this.threadStore.remove(sandbox, sessionId);
+    this.broadcast({ type: "thread_deleted", reqId, sessionId });
+    return true;
   }
 
   private async openSession(msg: Extract<ClientMessage, { type: "open_session" }>) {
@@ -238,6 +307,7 @@ export class Bridge implements SessionHost {
     if (existing?.alive) {
       // Reuse the running agent process. An earlier session is loaded as another thread.
       const thread = msg.loadSessionId ? await existing.newThread(msg.loadSessionId) : (existing.latest ?? (await existing.newThread()));
+      this.archive.delete(thread.sessionId);
       this.broadcast({ type: "session_opened", reqId: msg.reqId, session: thread.info() });
       return;
     }
@@ -249,6 +319,8 @@ export class Bridge implements SessionHost {
       });
     }
 
+    // The exited process's threads stay as saved ones; one of them can be loaded into the new process.
+    if (existing) for (const t of existing.threads.values()) this.archive.set(t.sessionId, t.snapshot());
     const remembered = this.state.get(msg.sandbox);
     const model = msg.model || remembered.model;
     const session = new Session(msg.sandbox, agent, cwd, model, this);
@@ -263,6 +335,7 @@ export class Bridge implements SessionHost {
       throw e;
     }
     this.state.set(msg.sandbox, { agent: agent.id, cwd });
+    this.archive.delete(thread.sessionId);
     this.broadcast({ type: "session_opened", reqId: msg.reqId, session: thread.info() });
     this.changed();
   }
@@ -308,9 +381,25 @@ export class Bridge implements SessionHost {
       if (!this.listError && !this.raw.some((r) => r.name === name)) {
         s.close();
         this.sessions.delete(name);
+        this.purgeThreads(name);
       }
     }
+    if (!this.listError) {
+      const gone = new Set([...this.archive.values()].map((a) => a.info.sandbox).filter((n) => !this.raw.some((r) => r.name === n)));
+      for (const name of gone) this.purgeThreads(name);
+    }
     this.changed();
+  }
+
+  /** The sandbox is gone: so are its threads. */
+  private purgeThreads(sandbox: string) {
+    const ids = [...this.archive.values()].filter((a) => a.info.sandbox === sandbox).map((a) => a.info.sessionId);
+    for (const s of this.sessions.values()) if (s.sandbox === sandbox) ids.push(...s.threads.keys());
+    for (const id of ids) {
+      this.archive.delete(id);
+      this.broadcast({ type: "thread_deleted", sessionId: id });
+    }
+    this.threadStore.removeSandbox(sandbox);
   }
 
   private async refreshStatus() {

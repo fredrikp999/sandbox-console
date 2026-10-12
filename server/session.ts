@@ -22,6 +22,7 @@ import { bound } from "./eventlog.ts";
 import { exitHint, rpcHint } from "./hints.ts";
 import { OPENSHELL, sandboxArg } from "./openshell.ts";
 import { JsonRpcPeer, METHOD_NOT_FOUND, RpcError, TransportClosed } from "./rpc.ts";
+import type { StoredThread } from "./threadstore.ts";
 
 const INIT_TIMEOUT = 60_000;
 const LOAD_TIMEOUT = 180_000;
@@ -44,6 +45,10 @@ export interface SessionHost {
   publish(thread: Thread, msg: ServerMessage): void;
   /** Something visible in the sandbox list changed (state, activity). */
   changed(): void;
+  /** This thread changed; save it to disk soon. */
+  persist(thread: Thread): void;
+  /** A saved thread of this id from before the agent process started, if there is one. */
+  archived(sandbox: string, sessionId: string): StoredThread | undefined;
 }
 
 export function agentCommand(sandbox: string, agent: AgentConfig, cwd: string, model?: string): string[] {
@@ -66,6 +71,9 @@ export class Thread {
   usage: SessionInfo["usage"] = undefined;
   log: SessionEvent[] = [];
 
+  /** While the agent replays a loaded session whose log we already have: don't record it twice. */
+  replaying = false;
+  private compacted = false;
   private seq = 0;
   private turn: Promise<void> | null = null;
   private permissions = new Map<string, PendingPermission>();
@@ -106,6 +114,28 @@ export class Thread {
       usage: this.usage,
       lastSeq: this.seq,
     };
+  }
+
+  /** Take over a saved thread: its log, and the title and times it had. */
+  restore(saved: StoredThread) {
+    this.log = saved.log;
+    this.seq = saved.log.at(-1)?.seq ?? saved.info.lastSeq;
+    this.title = saved.info.title ?? this.title;
+    this.startedAt = saved.info.startedAt;
+    this.usage = saved.info.usage;
+    this.lastActivity = saved.log.at(-1)?.ts ?? this.lastActivity;
+  }
+
+  /** What is written to disk for this thread, and whether the log was compacted since the last write. */
+  diskSnapshot() {
+    const rewritten = this.compacted;
+    this.compacted = false;
+    return { ...this.snapshot(), rewritten };
+  }
+
+  /** What is kept for this thread in memory. */
+  snapshot(): StoredThread {
+    return { info: this.info(), log: this.log };
   }
 
   // ---- what the browser asks for
@@ -211,7 +241,7 @@ export class Thread {
         }
         break;
     }
-    this.record({ type: "event", update });
+    if (!this.replaying) this.record({ type: "event", update });
   }
 
   /** The process exited: answer what was open and, after the stderr reader drained, say so in the log. */
@@ -235,9 +265,13 @@ export class Thread {
   private record(ev: NewEvent) {
     const full = { ...ev, sessionId: this.sessionId, seq: ++this.seq, ts: Date.now() } as SessionEvent;
     this.log.push(full);
-    if (this.log.length > MAX_EVENTS) this.log = bound(this.log, MAX_EVENTS);
+    if (this.log.length > MAX_EVENTS) {
+      this.log = bound(this.log, MAX_EVENTS);
+      this.compacted = true;
+    }
     this.lastActivity = full.ts;
     this.proc.host.publish(this, full);
+    this.proc.host.persist(this);
   }
 
   setState(s: ActivityState) {
@@ -316,6 +350,12 @@ export class Session {
       // The agent replays the conversation as session/update notifications.
       const t = new Thread(this, loadSessionId);
       t.title = this.pastTitles.get(loadSessionId) ?? null;
+      // A thread we saved already has its conversation; the replay would only repeat it.
+      const saved = this.host.archived(this.sandbox, loadSessionId);
+      if (saved) {
+        t.restore(saved);
+        t.replaying = true;
+      }
       this.threads.set(loadSessionId, t);
       try {
         const r = await this.peer.request<LoadSessionResponse>(
@@ -327,6 +367,8 @@ export class Session {
       } catch (e) {
         this.threads.delete(loadSessionId);
         throw e;
+      } finally {
+        t.replaying = false;
       }
       t.setState("idle");
       return t;
@@ -341,6 +383,15 @@ export class Session {
     this.orphans.delete(r.sessionId);
     t.setState("idle");
     return t;
+  }
+
+  /** Drop a thread: stop what it is doing and forget it. The agent keeps its own copy of the session. */
+  dropThread(sessionId: string) {
+    const t = this.threads.get(sessionId);
+    if (!t) return;
+    t.cancel();
+    t.cancelPermissions();
+    this.threads.delete(sessionId);
   }
 
   close() {

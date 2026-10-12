@@ -30,10 +30,11 @@ after(() => server.kill());
 
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
 
-function connect(opts: { origin?: string; token?: string | null } = {}) {
+function connect(opts: { origin?: string; token?: string | null; port?: number } = {}) {
+  const port = opts.port ?? PORT;
   const token = opts.token === undefined ? TOKEN : opts.token;
   const protocols = token === null ? ["sandbox-console"] : ["sandbox-console", `token.${token}`];
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`, protocols, { headers: { Origin: opts.origin ?? BASE } });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, protocols, { headers: { Origin: opts.origin ?? `http://127.0.0.1:${port}` } });
   const inbox: any[] = [];
   const waiters: { pred: (m: any) => boolean; resolve: (m: any) => void }[] = [];
   ws.on("message", (d) => {
@@ -50,7 +51,7 @@ function connect(opts: { origin?: string; token?: string | null } = {}) {
       const hit = inbox.find(pred);
       if (hit) return resolve(hit);
       waiters.push({ pred, resolve });
-      setTimeout(() => reject(new Error("timed out waiting for a message")), ms);
+      setTimeout(() => reject(new Error(`timed out waiting for a message: ${pred}`)), ms);
     });
   const send = (m: object) => ws.send(JSON.stringify(m));
   const opened = new Promise((resolve, reject) => {
@@ -283,4 +284,108 @@ test("a sandbox can have several threads that run independently", async () => {
   assert.match((await c.next((m) => m.type === "error" && m.reqId === "t2")).message, /isn't running/);
   c.ws.close();
   d.ws.close();
+});
+
+/** A second bridge on its own port, sharing a state directory, so the first can "restart". */
+async function startBridge(port: number, stateDir: string) {
+  const child = spawn(process.execPath, ["--import", "tsx", join(ROOT, "server/index.ts"), "--port", String(port)], {
+    env: {
+      ...process.env,
+      OPENSHELL_BIN: join(ROOT, "test/fixtures/fake-openshell.mjs"),
+      CONSOLE_TOKEN: TOKEN,
+      CONSOLE_STATE: join(stateDir, "state.json"),
+    },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  extra.push(child);
+  await new Promise<void>((resolve) => child.stdout!.on("data", (d) => String(d).includes("running") && resolve()));
+  return child;
+}
+
+/** Bridges a test started, killed at the end even if it failed half way. */
+const extra: ReturnType<typeof spawn>[] = [];
+after(() => {
+  for (const c of extra) c.kill();
+});
+
+function stopBridge(child: ReturnType<typeof spawn>) {
+  return new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.kill("SIGTERM");
+  });
+}
+
+test("threads survive a restart, can be resumed without repeating the replay, and can be deleted", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sc-persist-"));
+  const port = PORT + 100;
+  let bridge = await startBridge(port, dir);
+  let c = connect({ port });
+  await c.opened;
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+  c.send({ type: "open_session", reqId: "o1", sandbox: "opencode-demo", agent: "opencode", cwd: "/sandbox/myrepo" });
+  const sid = (await c.next((m) => m.type === "session_opened" && m.reqId === "o1")).session.sessionId;
+  c.send({ type: "subscribe", sessionId: sid, sinceSeq: 0 });
+  c.send({ type: "prompt", sessionId: sid, text: "remember me" });
+  const perm = await c.next((m) => m.type === "permission_request");
+  c.send({ type: "permission_answer", sessionId: sid, requestId: perm.requestId, optionId: "once" });
+  const end = await c.next((m) => m.type === "turn_end");
+  c.ws.close();
+  // SIGTERM: the bridge writes what it has before it exits.
+  await stopBridge(bridge);
+
+  bridge = await startBridge(port, dir);
+  c = connect({ port });
+  await c.opened;
+  const hello = await c.next((m) => m.type === "hello");
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+  const saved = hello.sessions.find((s: any) => s.sessionId === sid);
+  assert.equal(saved.state, "dead");
+  assert.equal(saved.title, "remember me");
+  assert.equal(saved.lastSeq, end.seq);
+  c.send({ type: "subscribe", sessionId: sid, sinceSeq: 0 });
+  await c.next((m) => m.type === "replay_done" && m.sessionId === sid);
+  assert.ok(c.inbox.some((m) => m.sessionId === sid && m.type === "user_message" && m.text === "remember me"));
+  // A saved thread can't be prompted until it's resumed.
+  c.send({ type: "prompt", sessionId: sid, text: "hi" });
+  assert.match((await c.next((m) => m.type === "error" && m.sessionId === sid)).message, /no longer open/);
+
+  // Resuming (session/load) keeps the saved log; the agent's replay is not recorded a second time.
+  c.send({ type: "open_session", reqId: "o2", sandbox: "opencode-demo", agent: "opencode", cwd: "/sandbox/myrepo", loadSessionId: sid });
+  const resumedMsg = await c.next((m) => (m.type === "session_opened" || m.type === "error") && m.reqId === "o2");
+  assert.equal(resumedMsg.type, "session_opened", `${resumedMsg.message} ${resumedMsg.detail}`);
+  const resumed = resumedMsg.session;
+  assert.equal(resumed.sessionId, sid);
+  assert.equal(resumed.state, "idle");
+  assert.equal(resumed.lastSeq, end.seq);
+
+  // Delete: gone from every tab, from disk, and from the agent's earlier-sessions list.
+  const other = connect({ port });
+  await other.opened;
+  c.send({ type: "delete_thread", reqId: "x1", sessionId: sid });
+  await c.next((m) => m.type === "thread_deleted" && m.reqId === "x1");
+  await other.next((m) => m.type === "thread_deleted" && m.sessionId === sid);
+  c.send({ type: "new_thread", reqId: "n1", sandbox: "opencode-demo" });
+  const fresh = (await c.next((m) => m.type === "session_opened" && m.reqId === "n1")).session;
+  c.send({ type: "list_past_sessions", reqId: "p1", sessionId: fresh.sessionId });
+  assert.deepEqual(
+    (await c.next((m) => m.type === "past_sessions" && m.reqId === "p1")).sessions.map((p: any) => p.sessionId),
+    ["ses_old1"],
+  );
+  c.send({ type: "delete_thread", reqId: "x2", sessionId: "ses_old1" });
+  c.send({ type: "delete_thread", reqId: "x3", sessionId: sid });
+  assert.match((await c.next((m) => m.type === "error" && m.reqId === "x3")).message, /already gone/);
+  // Delete all: every thread of the sandbox, live ones included.
+  c.send({ type: "delete_threads", reqId: "x4", sandbox: "opencode-demo" });
+  await c.next((m) => m.type === "result" && m.reqId === "x4");
+  assert.ok(c.inbox.some((m) => m.type === "thread_deleted" && m.sessionId === fresh.sessionId));
+  c.ws.close();
+  other.ws.close();
+  await stopBridge(bridge);
+
+  bridge = await startBridge(port, dir);
+  c = connect({ port });
+  await c.opened;
+  const after = await c.next((m) => m.type === "hello");
+  assert.deepEqual(after.sessions, []);
+  c.ws.close();
 });

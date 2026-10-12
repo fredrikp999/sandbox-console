@@ -131,6 +131,10 @@ export type ClientMessage =
   | { type: "new_thread"; reqId: string; sandbox: string }
   /** Stops the sandbox's agent process, and with it all its threads. */
   | { type: "close_session"; sessionId: string }
+  /** Forget a thread for good: its saved conversation goes too. The sandbox's files are untouched. */
+  | { type: "delete_thread"; reqId: string; sessionId: string }
+  /** Every thread of a sandbox, live or saved. */
+  | { type: "delete_threads"; reqId: string; sandbox: string }
   | { type: "list_past_sessions"; reqId: string; sessionId: string }
   | { type: "prompt"; sessionId: string; text: string }
   | { type: "cancel"; sessionId: string }
@@ -153,6 +157,8 @@ export type ServerMessage =
   | { type: "gateway"; gateway: GatewayStatus }
   | { type: "session_opened"; reqId?: string; session: SessionInfo }
   | { type: "session_info"; session: SessionInfo }
+  /** A thread was deleted (by any tab, or because its sandbox is gone). */
+  | { type: "thread_deleted"; reqId?: string; sessionId: string }
   | { type: "replay_done"; sessionId: string; lastSeq: number }
   | { type: "past_sessions"; reqId: string; sessionId: string; sessions: PastSession[]; error?: string }
   | { type: "network"; reqId: string; sessionId: string; hosts: NetworkHost[]; error?: string }

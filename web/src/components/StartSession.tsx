@@ -37,7 +37,8 @@ export function DeleteSandbox({ name }: { name: string }) {
   );
 }
 
-export function StartSession({ sb, resume }: { sb: SandboxRow; resume?: boolean }) {
+/** `resume`: the shown thread has ended. `resumeId`: the agent can load it again, so offer that. */
+export function StartSession({ sb, resume, resumeId }: { sb: SandboxRow; resume?: boolean; resumeId?: string }) {
   const agents = useStore((s) => s.agents);
   const [agent, setAgent] = useState(sb.agent ?? "");
   const [cwd, setCwd] = useState(sb.cwd ?? "/sandbox");
@@ -66,14 +67,14 @@ export function StartSession({ sb, resume }: { sb: SandboxRow; resume?: boolean 
     );
   }
 
-  const start = async (e: React.FormEvent) => {
+  const start = async (e: React.FormEvent, loadSessionId?: string) => {
     e.preventDefault();
     if (!agent) return;
     setBusy(true);
     setError(null);
     if (agent !== sb.agent) store.send({ type: "set_sandbox_agent", name: sb.name, agent });
     try {
-      await store.request({ type: "open_session", sandbox: sb.name, agent, cwd });
+      await store.request({ type: "open_session", sandbox: sb.name, agent, cwd, loadSessionId });
     } catch (err) {
       setError(err as RequestError);
     } finally {
@@ -85,17 +86,19 @@ export function StartSession({ sb, resume }: { sb: SandboxRow; resume?: boolean 
   const cmd = agents.find((a) => a.id === agent)?.cmd.join(" ");
   return (
     <div className="empty">
-      <b>{resume ? "Start a new session" : "No session open"}</b>
+      <b>{resumeId ? "This thread has ended" : resume ? "Start a new session" : "No session open"}</b>
       <span>
         {starting ? (
           `Starting ${agentLabel(agents, agent)} in ${sb.name}…`
+        ) : resumeId ? (
+          "The conversation above is saved. Resume it to continue where it left off, or start a new thread."
         ) : (
           <>
             Start the agent in this sandbox. The console runs <span className="mono">{cmd ?? "the agent"}</span> through the gateway.
           </>
         )}
       </span>
-      <form className="form" onSubmit={start}>
+      <form className="form" onSubmit={(e) => start(e)}>
         <label>
           {known ? "Agent" : "Which agent is in this sandbox?"}
           <select value={agent} onChange={(e) => setAgent(e.target.value)} disabled={starting} required>
@@ -119,8 +122,13 @@ export function StartSession({ sb, resume }: { sb: SandboxRow; resume?: boolean 
           </div>
         )}
         <div className="acts">
-          <button type="submit" className="btn primary" disabled={starting || !agent}>
-            {starting ? "Starting…" : "Start session"}
+          {resumeId && (
+            <button type="button" className="btn primary" disabled={starting || !agent} onClick={(e) => start(e, resumeId)}>
+              {starting ? "Starting…" : "Resume thread"}
+            </button>
+          )}
+          <button type="submit" className={`btn${resumeId ? "" : " primary"}`} disabled={starting || !agent}>
+            {starting ? "Starting…" : resumeId ? "New thread" : "Start session"}
           </button>
         </div>
       </form>

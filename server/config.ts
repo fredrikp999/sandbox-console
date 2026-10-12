@@ -55,7 +55,7 @@ export interface Remembered {
 
 export class StateStore {
   private data: { sandboxes: Record<string, Remembered> } = { sandboxes: {} };
-  constructor(private readonly file = process.env.CONSOLE_STATE ?? join(homedir(), ".config", "sandbox-console", "state.json")) {
+  constructor(readonly file = process.env.CONSOLE_STATE ?? join(homedir(), ".config", "sandbox-console", "state.json")) {
     try {
       this.data = JSON.parse(readFileSync(file, "utf8"));
       this.data.sandboxes ??= {};

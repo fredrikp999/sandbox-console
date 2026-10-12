@@ -129,12 +129,38 @@ test("threads: the tab that asks for one switches to it, others just list it", a
   store.activate("c1", "s1");
   assert.equal(store.state.bySandbox.c1, "s1");
 
-  // The agent exits, then a new process starts: the dead process's threads are dropped.
+  // The agent exits: its threads stay (saved on the bridge), shown as exited.
   for (const id of ["s1", "s2", "s3"]) b.recv({ type: "session_info", session: { ...info, sessionId: id, state: "dead" } });
   b.recv({ type: "session_opened", session: { ...info, sessionId: "s4", startedAt: 4 } });
   await tick();
-  assert.deepEqual(Object.keys(store.state.sessions), ["s4"]);
+  assert.deepEqual(Object.keys(store.state.sessions).sort(), ["s1", "s2", "s3", "s4"]);
   assert.equal(store.state.bySandbox.c1, "s4");
+
+  // Resuming a saved thread: same id, alive again; the tab subscribes for its new events.
+  b.recv({ type: "session_info", session: { ...info, sessionId: "s2", state: "idle" } });
+  await tick();
+  assert.deepEqual(b.sent.at(-1), { type: "subscribe", sessionId: "s2", sinceSeq: 0 });
+
+  // Closing a tab keeps the thread; the next open tab is shown. Activating it brings the tab back.
+  store.close("c1", "s4");
+  assert.ok(store.state.sessions.s4);
+  assert.equal(store.state.open.s4, undefined);
+  assert.notEqual(store.state.bySandbox.c1, "s4");
+  store.activate("c1", "s4");
+  assert.equal(store.state.bySandbox.c1, "s4");
+  assert.equal(store.state.open.s4, true);
+
+  // Deleting the thread that is shown switches to another one; deleting the rest leaves none.
+  const del = store.request({ type: "delete_thread", sessionId: "s4" });
+  b.recv({ type: "thread_deleted", reqId: b.sent.at(-1).reqId, sessionId: "s4" });
+  await del;
+  await tick();
+  assert.equal(store.state.sessions.s4, undefined);
+  assert.ok(store.state.sessions[store.state.bySandbox.c1]);
+  for (const id of ["s1", "s2", "s3"]) b.recv({ type: "thread_deleted", sessionId: id });
+  await tick();
+  assert.deepEqual(store.state.sessions, {});
+  assert.equal(store.state.bySandbox.c1, undefined);
 });
 
 test("a refused connection with a wrong token shows the access-link page", async () => {

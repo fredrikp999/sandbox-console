@@ -1,8 +1,94 @@
 // Left column: gateway line, sandbox rows with status, "New sandbox".
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ActivityState } from "../../../shared/protocol.ts";
 import { dotClass, sandboxStatus } from "../format.ts";
-import { store, useStore } from "../store.ts";
+import { type RequestError, store, useStore } from "../store.ts";
 import { NewSandbox } from "./NewSandbox.tsx";
+
+const DOT: Record<ActivityState, string> = {
+  waiting: "dot warn",
+  working: "dot ok pulse",
+  starting: "dot idle",
+  idle: "dot idle",
+  dead: "dot bad",
+};
+
+const ALL = "*all";
+
+/** The threads of the selected sandbox: open one in a tab, or delete it for good. */
+function SandboxThreads({ sandbox }: { sandbox: string }) {
+  const sessions = useStore((s) => s.sessions);
+  const open = useStore((s) => s.open);
+  const current = useStore((s) => s.bySandbox[sandbox]);
+  /** A session id, or ALL, that the next click deletes. */
+  const [armed, setArmed] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const threads = useMemo(
+    () =>
+      Object.values(sessions)
+        .filter((v) => v.info.sandbox === sandbox)
+        .sort((a, b) => b.info.startedAt - a.info.startedAt),
+    [sessions, sandbox],
+  );
+  if (!threads.length) return null;
+
+  const remove = async (target: string) => {
+    if (armed !== target) return setArmed(target);
+    setArmed(null);
+    setError(null);
+    try {
+      await store.request(target === ALL ? { type: "delete_threads", sandbox } : { type: "delete_thread", sessionId: target });
+    } catch (e) {
+      setError((e as RequestError).message);
+    }
+  };
+
+  return (
+    <div className="sb-threads">
+      {threads.map((t, i) => {
+        const id = t.info.sessionId;
+        const label = t.info.title || `Thread ${threads.length - i}`;
+        return (
+          <div key={id} className="sb-thread">
+            <button
+              type="button"
+              className="sb-thread-open"
+              aria-current={open[id] && id === current}
+              title={open[id] ? `${label} (open in a tab)` : `Open ${label}`}
+              onClick={() => store.activate(sandbox, id)}
+            >
+              <span className={DOT[t.info.state]} />
+              <span className="sb-thread-title">{label}</span>
+              {!open[id] && <span className="sb-thread-hint">open</span>}
+            </button>
+            <button
+              type="button"
+              className={`thread-x${armed === id ? " armed" : ""}`}
+              aria-label={`Delete ${label}`}
+              title="Delete this thread and its saved conversation. The sandbox's files stay."
+              onClick={() => remove(id)}
+              onBlur={() => setArmed((a) => (a === id ? null : a))}
+            >
+              {armed === id ? "Delete?" : "×"}
+            </button>
+          </div>
+        );
+      })}
+      {threads.length > 1 && (
+        <button
+          type="button"
+          className={`sb-thread-all${armed === ALL ? " armed" : ""}`}
+          title="Delete every thread in this sandbox and its saved conversations. The sandbox's files stay."
+          onClick={() => remove(ALL)}
+          onBlur={() => setArmed((a) => (a === ALL ? null : a))}
+        >
+          {armed === ALL ? `Delete all ${threads.length}?` : "Delete all threads"}
+        </button>
+      )}
+      {error && <div className="form-error">{error}</div>}
+    </div>
+  );
+}
 
 function ThemeToggle() {
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "auto");
@@ -82,6 +168,7 @@ export function Sidebar() {
                 {st.meta}
               </span>
             </button>
+            {s.name === selected && <SandboxThreads sandbox={s.name} />}
           </li>
         ))}
       </ul>

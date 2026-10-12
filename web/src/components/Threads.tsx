@@ -21,14 +21,15 @@ const STATE_LABEL: Record<ActivityState, string> = {
 
 export function Threads({ sandbox, onError }: { sandbox: string; onError: (text: string) => void }) {
   const sessions = useStore((s) => s.sessions);
+  const open = useStore((s) => s.open);
   const current = useStore((s) => s.bySandbox[sandbox]);
   const [busy, setBusy] = useState(false);
   const threads = useMemo(
     () =>
       Object.values(sessions)
-        .filter((v) => v.info.sandbox === sandbox)
+        .filter((v) => v.info.sandbox === sandbox && open[v.info.sessionId])
         .sort((a, b) => a.info.startedAt - b.info.startedAt),
-    [sessions, sandbox],
+    [sessions, open, sandbox],
   );
   const alive = threads.some((t) => t.info.state !== "dead");
 
@@ -47,19 +48,30 @@ export function Threads({ sandbox, onError }: { sandbox: string; onError: (text:
     <div className="threads" role="tablist" aria-label="Threads">
       {threads.map((t, i) => {
         const label = t.info.title || `Thread ${i + 1}`;
+        const id = t.info.sessionId;
         return (
-          <button
-            key={t.info.sessionId}
-            type="button"
-            role="tab"
-            className="thread"
-            aria-selected={t.info.sessionId === current}
-            title={`${label} · ${STATE_LABEL[t.info.state]}`}
-            onClick={() => store.activate(sandbox, t.info.sessionId)}
-          >
-            <span className={DOT[t.info.state]} />
-            <span className="thread-title">{label}</span>
-          </button>
+          <span key={id} className="thread-wrap">
+            <button
+              type="button"
+              role="tab"
+              className="thread"
+              aria-selected={id === current}
+              title={`${label} · ${STATE_LABEL[t.info.state]}`}
+              onClick={() => store.activate(sandbox, id)}
+            >
+              <span className={DOT[t.info.state]} />
+              <span className="thread-title">{label}</span>
+            </button>
+            <button
+              type="button"
+              className="thread-x"
+              aria-label={`Close ${label}`}
+              title="Close this tab. The thread is kept; open it again from the sidebar."
+              onClick={() => store.close(sandbox, id)}
+            >
+              ×
+            </button>
+          </span>
         );
       })}
       {alive && (

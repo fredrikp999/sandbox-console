@@ -102,7 +102,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 | `OPENSHELL_BIN` | The `openshell` CLI. Default `openshell` on the PATH. |
 | `OPENSHELL_CONFIGS` | Your openshell-configs checkout. New sandboxes get its `policies/vscode-terminal.yaml`. Also looked for in `~/openshell-configs/openshell-configs`. |
 | `OPENSHELL_POLICY` | A policy file for new sandboxes, instead of the one above. |
-| `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. |
+| `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. Threads (their conversations) are saved in a `threads/` folder next to it. |
 | `CONSOLE_TOKEN` | A fixed access token instead of a random one (at least 8 characters of `A-Z a-z 0-9 _ -`). Mainly for scripting and tests. |
 
 ## Security

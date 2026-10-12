@@ -216,7 +216,7 @@ export function Chat() {
                 {flash.tone === "error" ? <b>{flash.text}</b> : flash.text}
               </div>
             )}
-            {dead && sb && <StartSession key={`resume-${sb.name}`} sb={sb} resume />}
+            {dead && sb && <StartSession key={`resume-${info?.sessionId}`} sb={sb} resume resumeId={info?.canLoad ? info.sessionId : undefined} />}
           </>
         ) : (
           sb && <StartSession key={sb.name} sb={sb} />
