@@ -1661,3 +1661,119 @@ select.repo-pick {
 .sb-thread-all.armed {
   color: var(--bad);
 }
+
+/* ---------- catalog ---------- */
+.cat-search {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.cat-search input {
+  flex: 1;
+  min-width: 0;
+  font: 13px var(--body);
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+}
+.cat-count {
+  font: 500 11px var(--body);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.cat-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.cat-item {
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+}
+.cat-item:hover,
+.cat-item.open {
+  background: var(--sunken);
+}
+.cat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.cat-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--fg);
+  text-align: left;
+}
+.cat-name .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.cat-name:hover .mono {
+  color: var(--accent);
+}
+.cat-caret {
+  color: var(--muted);
+  font-size: 10px;
+  width: 10px;
+  flex: none;
+}
+.cat-acts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.cat-state {
+  color: var(--ok);
+  font-size: 12px;
+}
+.cat-desc {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  padding-left: 15px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cat-item.open .cat-desc {
+  display: block;
+}
+.cat-more {
+  display: grid;
+  gap: 6px;
+  padding: 6px 0 2px 15px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cat-preview {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font: 11.5px / 1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

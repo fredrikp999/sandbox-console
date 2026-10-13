@@ -24,6 +24,7 @@ const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   open_editor: { reqId: "s", sandbox: "s", editor: "s", folder: "s" },
   editor_setting: { reqId: "s", editor: "s" },
   repo: { reqId: "s", sandbox: "s", op: "s", repo: "s?", source: "s?", base: "s?", dest: "s?" },
+  catalog: { reqId: "s", op: "s", sandbox: "s?", kind: "s?", name: "s?" },
 };
 
 const MAX_STRING = 200_000; // prompts can be long; everything else is short

@@ -5,13 +5,15 @@
     "modelEnv": "OPENCODE_CONFIG_CONTENT",
     "defaultModel": "openrouter/nvidia/nemotron-3.5-lightning:free",
     "image": "opencode-sandbox:latest",
-    "provider": "openrouter"
+    "provider": "openrouter",
+    "layout": "opencode"
   },
   "claude": {
     "label": "Claude Code",
     "cmd": ["claude-acp-start"],
     "image": "claude-sandbox:latest",
     "provider": "claude",
-    "missingHint": "This sandbox's image has no claude-acp-start (the claude-agent-acp ACP adapter). Rebuild it in openshell-configs with `make claude-sandbox` (or `make images` for claude-browser and claude-hyperframes too), then recreate the sandbox."
+    "missingHint": "This sandbox's image has no claude-acp-start (the claude-agent-acp ACP adapter). Rebuild it in openshell-configs with `make claude-sandbox` (or `make images` for claude-browser and claude-hyperframes too), then recreate the sandbox.",
+    "layout": "claude"
   }
 }

@@ -1,18 +1,22 @@
 // The bridge's core: polls OpenShell for sandboxes, owns the agent sessions and
 // handles messages from the browser tabs.
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { WebSocket } from "ws";
 import type {
   AgentId,
+  CatalogKind,
   ClientMessage,
   GatewayStatus,
   NetworkHost,
   RepoLink,
   RepoOp,
   RepoReview,
+  SandboxCatalog,
   SandboxRow,
   ServerMessage,
 } from "../shared/protocol.ts";
+import * as catalog from "./catalog.ts";
 import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
 import * as editor from "./editor.ts";
 import type { Explained } from "./hints.ts";
@@ -289,6 +293,9 @@ export class Bridge implements SessionHost {
       case "repo":
         return this.repo(tab, msg);
 
+      case "catalog":
+        return this.catalog(tab, msg);
+
       case "open_editor": {
         if (!editor.isEditor(msg.editor)) throw new Error(`Unknown editor ${msg.editor}`);
         const sb = this.sandbox(msg.sandbox);
@@ -412,6 +419,75 @@ export class Bridge implements SessionHost {
       this.changed();
     }
     this.send(tab, { type: "repo_result", reqId: msg.reqId, sandbox: name, repo: r?.name ?? null, log, review });
+  }
+
+  private async catalog(tab: Tab, msg: Extract<ClientMessage, { type: "catalog" }>) {
+    const log: string[] = [];
+    const reply = (items: catalog.Entry[], sandbox?: SandboxCatalog, preview?: string) =>
+      this.send(tab, {
+        type: "catalog",
+        reqId: msg.reqId,
+        items: items.map(({ path: _, format: __, ...i }) => i),
+        folder: catalog.USER_CATALOG.replace(homedir(), "~"),
+        sandbox,
+        preview,
+        log,
+      });
+    if (msg.op === "list" && !msg.sandbox) return reply(await catalog.list());
+    if (!["list", "preview", "install", "remove"].includes(msg.op)) throw new Error(`Unknown catalog action ${msg.op}`);
+    if (!msg.sandbox) throw new Error("Which sandbox?");
+    const sb = this.sandbox(msg.sandbox);
+    const name = sb.name;
+    const row = this.rows().find((r) => r.name === name);
+    const agentId = row?.session?.agent ?? row?.agent;
+    if (!agentId) throw new Error(`Which agent runs in ${name}? Choose it in the sidebar first.`);
+    const agent = this.agent(agentId);
+    const layout = agent.layout ?? (agent.id === "opencode" ? "opencode" : "claude");
+    const item = async () => {
+      const kind = msg.kind as CatalogKind;
+      if (!catalog.KINDS.includes(kind) || !msg.name || !catalog.ITEM_NAME.test(msg.name)) throw new Error("Which catalog item?");
+      return { kind, name: msg.name };
+    };
+    const look = async (): Promise<SandboxCatalog> => {
+      const view: SandboxCatalog = {
+        agent: agent.id,
+        places: catalog.PLACES[layout],
+        present: [],
+        installed: this.state.get(name).catalog ?? [],
+      };
+      if (sb.phase !== "Ready") return { ...view, error: `${name} is ${sb.phase}, not Ready.` };
+      try {
+        view.present = await catalog.present(name, layout);
+      } catch (e) {
+        view.error = `${(e as Error).message}: ${(e as Explained).detail ?? ""}`.trim();
+      }
+      return view;
+    };
+
+    if (msg.op === "preview") {
+      const { kind, name: n } = await item();
+      return reply([], undefined, await catalog.preview(await catalog.find(kind, n), layout));
+    }
+    if (msg.op === "install" || msg.op === "remove") {
+      if (sb.phase !== "Ready") throw new Error(`Sandbox ${name} is ${sb.phase}, not Ready.`);
+      const { kind, name: n } = await item();
+      if (this.repoBusy.has(name)) throw new Error(`Something else is being copied into ${name}. Wait for it to finish.`);
+      this.repoBusy.add(name);
+      try {
+        const others = (this.state.get(name).catalog ?? []).filter((i) => !(i.kind === kind && i.name === n));
+        if (msg.op === "install") {
+          const done = await catalog.install(name, await catalog.find(kind, n), layout, log);
+          this.state.set(name, { catalog: [...others, done] });
+        } else {
+          await catalog.remove(name, kind, n, layout, log);
+          this.state.set(name, { catalog: others });
+        }
+      } finally {
+        this.repoBusy.delete(name);
+      }
+      if (this.sessions.has(name)) log.push("New threads pick this up. A thread that's already running may not until the agent restarts.");
+    }
+    return reply(await catalog.list(), await look());
   }
 
   /** Forget a thread, live or saved. False if there is no such thread. */

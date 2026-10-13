@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentId, AgentInfo, RepoLink } from "../shared/protocol.ts";
+import type { AgentId, AgentInfo, InstalledItem, RepoLink } from "../shared/protocol.ts";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -19,6 +19,8 @@ export interface AgentConfig {
   provider?: string;
   /** Shown when the agent command is missing from the image (exit 127). */
   missingHint?: string;
+  /** Where it looks for agents, skills and global instructions: "claude" (~/.claude) or "opencode" (~/.config/opencode). */
+  layout?: "claude" | "opencode";
 }
 
 export function loadAgents(): Map<AgentId, AgentConfig> {
@@ -52,6 +54,8 @@ export interface Remembered {
   cwd?: string;
   model?: string;
   repos?: RepoLink[];
+  /** What the console put in from the catalog. */
+  catalog?: InstalledItem[];
 }
 
 export class StateStore {

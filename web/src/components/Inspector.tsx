@@ -1,11 +1,13 @@
 // Right column, about the code: "Changes" (the repository workflow and the files
-// this thread edited) and "Activity" (network and approvals). Sandbox actions live
-// in the chat header; threads in the tabs and the sidebar.
+// this thread edited), "Catalog" (agents, skills and context to add to the
+// sandbox) and "Activity" (network and approvals). Sandbox actions live in the
+// chat header; threads in the tabs and the sidebar.
 import { useCallback, useEffect, useState } from "react";
 import type { NetworkHost, SandboxRow, ServerMessage } from "../../../shared/protocol.ts";
 import { type BundleStatus, downloadBundle } from "../bundle.ts";
 import { relPath } from "../format.ts";
 import { type SessionView, store, useStore } from "../store.ts";
+import { Catalog } from "./Catalog.tsx";
 import { Repos } from "./Repos.tsx";
 
 const NETWORK_EVERY = 15_000;
@@ -148,7 +150,7 @@ function Activity({ view, net }: { view: SessionView | undefined; net: ReturnTyp
   );
 }
 
-type Tab = "changes" | "activity";
+type Tab = "changes" | "catalog" | "activity";
 
 export function Inspector() {
   const sb: SandboxRow | undefined = useStore((s) => s.sandboxes.find((x) => x.name === s.selected));
@@ -163,6 +165,9 @@ export function Inspector() {
       <div className="pane-head tabs" role="tablist" aria-label="Inspector">
         <button type="button" role="tab" className="itab" aria-selected={tab === "changes"} onClick={() => setTab("changes")}>
           Changes
+        </button>
+        <button type="button" role="tab" className="itab" aria-selected={tab === "catalog"} onClick={() => setTab("catalog")}>
+          Catalog
         </button>
         <button
           type="button"
@@ -183,6 +188,8 @@ export function Inspector() {
             {view && <Edited view={view} />}
             {view && alive && !sb.repos.length && <BundleFallback view={view} />}
           </>
+        ) : tab === "catalog" ? (
+          <Catalog sb={sb} />
         ) : (
           <Activity view={view} net={net} />
         )}

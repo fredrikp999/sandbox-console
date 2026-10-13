@@ -85,6 +85,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works. × closes a tab; the thread stays in the sidebar.
 - **Sidebar:** under the selected sandbox, all its threads (open one, or delete it), and **Earlier from the agent…**: sessions the agent itself keeps, loaded with `session/load` as another thread.
 - **Changes** (right): the repository as four steps (in the sandbox, the agent's work, review, on origin), with the next one highlighted; see below. Under it, the files this thread edited (click one to jump to the edit).
+- **Catalog** (right): agents, skills and context files to add to the sandbox; see below.
 - **Activity** (right): network this session, from `openshell logs` (the tab shows how many hosts were denied), and what the agent was always allowed.
 
 **VS Code.** Needs the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension and the `code` command (in VS Code: *Shell Command: Install 'code' command in PATH*; the console also looks in `/Applications`).
@@ -102,6 +103,14 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **What the sandbox gets:** only bundles of the base branch. No other branches, no remote, no credentials. Git with credentials runs only on this machine, and never prompts (a prompt would hang): use SSH keys in ssh-agent or a credential helper.
 - **Unlink** forgets the link. No files are deleted.
 
+**Catalog.** Agents, skills and context files on this machine, to add to a sandbox with one click.
+- **Where they come from:** your catalog folder (`~/.config/sandbox-console/catalog`, with `agents/<name>.md`, `skills/<name>/SKILL.md` and `context/<name>.md`), the examples in [`catalog/`](catalog), and the skills and agents you already have in `~/.claude`, `~/.agents` and `~/.config/opencode`. If a name is in more than one, the first wins.
+- **Where they go:** where the sandbox's agent looks, in its home (`/sandbox`). Claude Code: `~/.claude/agents/`, `~/.claude/skills/` and `~/.claude/CLAUDE.md`. OpenCode: `~/.config/opencode/agents/`, `~/.config/opencode/skills/` and `~/.config/opencode/AGENTS.md`.
+- **Agents** are written in Claude Code's format (`name`, `description`, `tools`) and rewritten for OpenCode (`mode: subagent`, with `edit`, `bash` and `webfetch` denied when `tools` leaves them out). The model isn't carried over, since the two name models differently.
+- **Context files** are added to the agent's global instructions between `<!-- sandbox-console:begin <name> -->` and `…:end <name> -->` lines. What else is in that file stays as it is, and **×** takes only that block out.
+- **Updates:** an item shows **Update** when the catalog's copy changed since it was added, and **Replace** when the sandbox has its own item of that name.
+- **When it applies:** new threads pick it up. A running thread may not until the agent restarts (⋯ → Stop the agent).
+- **Limits:** skills skip dotfiles, `.git` and `node_modules`, and can be up to 10 MB.
 
 **Getting code out without a linked repository.** Have the agent commit, then use "download the agent's commits as a git bundle" in the Changes tab (or `/bundle <dir>`).
 - **What's in it:** the commits on the current branch of the session's directory that aren't in `host/main` or `host/master`. Those branches exist when the repo came in through openshell-configs' `bundle.sh in`; without them, the whole branch.
@@ -118,6 +127,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 | `OPENSHELL_POLICY` | A policy file for new sandboxes, instead of the one above. |
 | `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. Threads (their conversations) are saved in a `threads/` folder next to it. |
 | `CONSOLE_REPOS` | Where repositories given as a URL are cloned. Default `~/sandbox-repos`. |
+| `CONSOLE_CATALOG` | Your catalog folder. Default `~/.config/sandbox-console/catalog`. |
 | `CONSOLE_VSCODE`, `CONSOLE_CURSOR` | The editor's command line, if it isn't `code` / `cursor` on the PATH or in `/Applications`. |
 | `CONSOLE_TOKEN` | A fixed access token instead of a random one (at least 8 characters of `A-Z a-z 0-9 _ -`). Mainly for scripting and tests. |
 
@@ -159,6 +169,7 @@ server/              the bridge (Node, TypeScript, run with tsx)
   bundle.ts            git bundle out of the sandbox (bundle.sh "out")
   editor.ts            "Open in VS Code": SSH host entry, then the editor's CLI on a vscode-remote:// folder
   repos.ts             repositories: clone/pull on the host, bundles in and out, review, merge, push
+  catalog.ts           the catalog: reading it, agent format conversion, copying into a sandbox
   threadstore.ts       threads on disk
   validate.ts          shape checks for browser messages, sandbox name rules
   eventlog.ts          keeps the per-session event log bounded without breaking replay
@@ -171,6 +182,7 @@ web/                 React UI (Vite)
   src/auth.ts          the access token
   src/components/      Sidebar, Chat, ConversationLog, Composer, ModelPicker, Inspector, …
   vite.config.ts       UI build and dev server
+catalog/             built-in catalog examples: agents, skills, context files
 test/fixtures/       fake `openshell` CLI with a scripted agent
 docs/                design and mockup
 ```

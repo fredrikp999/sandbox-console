@@ -289,6 +289,7 @@ class Store {
       case "network":
       case "repo_result":
       case "editor_opened":
+      case "catalog":
         this.settle(m);
         if (m.type === "error" && !m.reqId) {
           const id = m.sessionId;

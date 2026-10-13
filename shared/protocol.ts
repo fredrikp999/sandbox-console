@@ -95,6 +95,49 @@ export interface RepoReview {
 
 export type RepoOp = "link" | "send" | "get" | "review" | "merge" | "push" | "unlink";
 
+export type CatalogKind = "agent" | "skill" | "context";
+
+/** Something in the catalog on this machine that can be put into a sandbox. */
+export interface CatalogItem {
+  /** "<kind>:<name>"; a name is unique per kind. */
+  id: string;
+  kind: CatalogKind;
+  name: string;
+  description: string;
+  /** Which catalog folder it is from, e.g. "Built in" or "~/.claude". */
+  source: string;
+  files: number;
+  bytes: number;
+  /** Of its contents, to tell when the sandbox has an older copy. */
+  hash: string;
+  /** Why it can't be put in, if it can't. */
+  problem?: string;
+}
+
+/** What the console put into a sandbox from the catalog. */
+export interface InstalledItem {
+  kind: CatalogKind;
+  name: string;
+  source: string;
+  hash: string;
+  at: number;
+}
+
+/** The catalog seen from one sandbox. */
+export interface SandboxCatalog {
+  /** Which agent's places are used, e.g. Claude Code's ~/.claude. */
+  agent: AgentId;
+  /** Where each kind goes in the sandbox. */
+  places: Record<CatalogKind, string>;
+  /** "<kind>:<name>" of everything there now, from the catalog or not. */
+  present: string[];
+  installed: InstalledItem[];
+  /** Couldn't look into the sandbox (e.g. it isn't Ready). */
+  error?: string;
+}
+
+export type CatalogOp = "list" | "preview" | "install" | "remove";
+
 export type EditorId = "vscode" | "cursor";
 
 export interface EditorInfo {
@@ -224,7 +267,12 @@ export type ClientMessage =
       source?: string;
       base?: string;
       dest?: string;
-    };
+    }
+  /**
+   * The catalog. list: everything in it, and with `sandbox` what that sandbox has.
+   * preview: an item's main file as it would go in. install / remove: in `sandbox`.
+   */
+  | { type: "catalog"; reqId: string; op: CatalogOp; sandbox?: string; kind?: CatalogKind; name?: string };
 
 // ---- bridge -> browser
 
@@ -251,5 +299,15 @@ export type ServerMessage =
   | { type: "editor_opened"; reqId: string; log: string[]; needsSetting: boolean }
   /** What a repo action did, step by step, and the review if it produced one. */
   | { type: "repo_result"; reqId: string; sandbox: string; repo: string | null; log: string[]; review?: RepoReview }
+  | {
+      type: "catalog";
+      reqId: string;
+      items: CatalogItem[];
+      /** Where to put your own: agents/, skills/ and context/ under it. */
+      folder: string;
+      sandbox?: SandboxCatalog;
+      preview?: string;
+      log: string[];
+    }
   | { type: "error"; reqId?: string; sessionId?: string; message: string; detail?: string; hint?: string }
   | SessionEvent;
