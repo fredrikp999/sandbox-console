@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -31,6 +31,7 @@ before(async () => {
       ENGINE: join(ROOT, "test/fixtures/fake-engine.mjs"),
       FAKE_IMAGES: "claude-sandbox:latest,claude-browser:latest",
       FAKE_CREATE_LOG: createLog,
+      FAKE_FORWARDS: join(configs, "forwards.json"),
     },
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -441,5 +442,37 @@ test("sandbox types: image and policy checks, creating one, and building an imag
   const done = await c.next((m) => m.type === "image_build" && m.build.state !== "running");
   assert.equal(done.build.state, "done");
   assert.ok(done.build.lines.includes("step 2"));
+  c.ws.close();
+});
+
+test("ports: forward, list, refuse a port in use here, stop", async () => {
+  const c = connect();
+  await c.opened;
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+  const port = 41000 + Math.floor(Math.random() * 2000);
+  c.send({ type: "forward", reqId: "f1", sandbox: "opencode-demo", op: "start", port });
+  const started = await c.next((m) => m.reqId === "f1");
+  assert.equal(started.type, "ports");
+  assert.deepEqual(
+    started.forwards.map((f: any) => f.port),
+    [port],
+  );
+  assert.match(started.log[0], new RegExp(`127.0.0.1:${port}`));
+
+  c.send({ type: "ports", reqId: "f2", sandbox: "claude-demo" });
+  assert.deepEqual((await c.next((m) => m.reqId === "f2")).forwards, [], "only that sandbox's forwards");
+
+  // A port something here already listens on is refused before openshell is asked.
+  const busy = createServer();
+  await new Promise<void>((r) => busy.listen(port + 1, "127.0.0.1", r));
+  c.send({ type: "forward", reqId: "f3", sandbox: "opencode-demo", op: "start", port: port + 1 });
+  assert.match((await c.next((m) => m.reqId === "f3")).message, /already in use on this machine/);
+  busy.close();
+
+  c.send({ type: "forward", reqId: "f4", sandbox: "opencode-demo", op: "start", port: 80 });
+  assert.match((await c.next((m) => m.reqId === "f4")).message, /1024 to 65535/);
+
+  c.send({ type: "forward", reqId: "f5", sandbox: "opencode-demo", op: "stop", port });
+  assert.deepEqual((await c.next((m) => m.reqId === "f5")).forwards, []);
   c.ws.close();
 });

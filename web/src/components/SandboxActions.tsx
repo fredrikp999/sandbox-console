@@ -1,9 +1,11 @@
 // The sandbox's actions, in the chat header next to its name: open a folder of it
-// in VS Code (or Cursor), and a menu with the rare ones (stop the agent, delete).
+// in VS Code (or Cursor), forward its ports, and a menu with the rare ones (stop
+// the agent, delete).
 import { useCallback, useState } from "react";
 import type { EditorId, SandboxRow, ServerMessage } from "../../../shared/protocol.ts";
 import { type RequestError, store, useStore } from "../store.ts";
 import { Popover } from "./Popover.tsx";
+import { Ports } from "./Ports.tsx";
 
 type Opened = Extract<ServerMessage, { type: "editor_opened" }>;
 type Outcome = { tone: "ok" | "error"; lines: string[]; hint?: string };
@@ -194,6 +196,7 @@ export function SandboxActions({ sb, sessionId, cwd, alive }: { sb: SandboxRow; 
   return (
     <div className="sb-actions">
       <OpenInEditor sb={sb} cwd={cwd} />
+      <Ports sb={sb} />
       <MoreMenu sb={sb} sessionId={sessionId} alive={alive} />
     </div>
   );

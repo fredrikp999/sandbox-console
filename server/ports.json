@@ -1,0 +1,12 @@
+[
+  {
+    "port": 3002,
+    "label": "HyperFrames Studio",
+    "match": "hyperframes preview",
+    "hint": "Ask the agent to start it in the project folder: npx hyperframes preview --background --no-open"
+  },
+  { "port": 5173, "label": "Vite dev server", "match": "vite" },
+  { "port": 3000, "label": "Dev server (Next.js, Express, …)", "match": "next dev" },
+  { "port": 8000, "label": "Python http.server, Django", "match": "http.server" },
+  { "port": 8080, "label": "Web server" }
+]

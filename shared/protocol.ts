@@ -125,6 +125,27 @@ export interface ImageBuild {
   startedAt: number;
 }
 
+/** A port on this machine forwarded to the same port in a sandbox. */
+export interface PortForward {
+  sandbox: string;
+  port: number;
+  bind: string;
+  alive: boolean;
+}
+
+/** A port something listens on in the sandbox, and the program, if it can be seen. */
+export interface ListeningPort {
+  port: number;
+  command?: string;
+}
+
+export interface PortPreset {
+  port: number;
+  label: string;
+  /** How to get it running in the sandbox. */
+  hint?: string;
+}
+
 export type CatalogKind = "agent" | "skill" | "context" | "tool";
 
 /** Something in the catalog on this machine that can be put into a sandbox. */
@@ -252,6 +273,10 @@ export type ClientMessage =
   | { type: "list_sandboxes" }
   /** From a sandbox type (its image, policy and agent), or else from the agent's image in agents.json. */
   | { type: "create_sandbox"; reqId: string; name: string; agent?: AgentId; sandboxType?: string; workdir: string }
+  /** Port forwards of a sandbox, what listens in it, and the presets for it. */
+  | { type: "ports"; reqId: string; sandbox: string }
+  /** Start or stop forwarding a port (the same number on both sides). */
+  | { type: "forward"; reqId: string; sandbox: string; op: "start" | "stop"; port: number }
   /** The sandbox types, with whether each image is built. */
   | { type: "sandbox_types"; reqId: string }
   /** Build a sandbox type's image with `make <target>` in openshell-configs. */
@@ -329,6 +354,18 @@ export type ServerMessage =
       build: ImageBuild | null;
       /** Why images can't be built from here, if they can't. */
       buildNote?: string;
+    }
+  | {
+      type: "ports";
+      reqId: string;
+      sandbox: string;
+      forwards: PortForward[];
+      listening: ListeningPort[];
+      presets: PortPreset[];
+      /** What a start or stop did. */
+      log: string[];
+      /** Couldn't look into the sandbox. */
+      error?: string;
     }
   /** Progress of an image build, to every tab. */
   | { type: "image_build"; build: ImageBuild }

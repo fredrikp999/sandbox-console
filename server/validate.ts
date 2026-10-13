@@ -8,6 +8,8 @@ const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   list_sandboxes: {},
   create_sandbox: { reqId: "s", name: "s", agent: "s?", sandboxType: "s?", workdir: "s" },
   sandbox_types: { reqId: "s" },
+  ports: { reqId: "s", sandbox: "s" },
+  forward: { reqId: "s", sandbox: "s", op: "s", port: "n" },
   build_image: { reqId: "s", sandboxType: "s" },
   delete_sandbox: { reqId: "s", name: "s" },
   set_sandbox_agent: { name: "s", agent: "s" },

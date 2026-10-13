@@ -11,6 +11,7 @@ A local web app for the coding agents in your [OpenShell](https://github.com/NVI
 - **Catalog:** add agents, skills, context files and command-line tools to a sandbox with one click.
 - **Sandbox types:** create a plain Claude Code or OpenCode sandbox, or one with a browser or HyperFrames, from images built on this machine, each with its own network policy.
 - **VS Code:** open a sandbox folder in VS Code (or Cursor) over Remote-SSH through the gateway.
+- **Ports:** forward a port of the sandbox to this machine, to open what the agent serves (the HyperFrames Studio, a dev server) in your browser.
 - **Activity:** hosts the sandbox reached or was denied, and what the agent was always allowed.
 
 The design is in [docs/DESIGN.md](docs/DESIGN.md), and [docs/mockup.html](docs/mockup.html) is a clickable mockup.
@@ -87,7 +88,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 
 **Where things are.** The header is about the sandbox, the tabs and conversation about a thread, the right column about the code.
 - **Hiding the side panels:** the buttons at the left and right ends of the header, or <kbd>⌘B</kbd> / <kbd>Ctrl</kbd>+<kbd>B</kbd> for the sandboxes and <kbd>⌥⌘B</kbd> / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd> for the right column. The browser remembers what you hid. In a narrow window the right column opens over the conversation (<kbd>Esc</kbd> or a click outside closes it).
-- **Header:** the sandbox name; agent, directory and context used (hover for the agent command, session id and token totals); the model; **Open in VS Code** (▾ picks the folder, or Cursor; see below); and **⋯** with **Stop the agent** and **Delete sandbox**.
+- **Header:** the sandbox name; agent, directory and context used (hover for the agent command, session id and token totals); the model; **Open in VS Code** (▾ picks the folder, or Cursor; see below); **Ports** (see below); and **⋯** with **Stop the agent** and **Delete sandbox**.
 - **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works. × closes a tab; the thread stays in the sidebar.
 - **Sidebar:** under the selected sandbox, all its threads (open one, or delete it), and **Earlier from the agent…**: sessions the agent itself keeps, loaded with `session/load` as another thread.
 - **Changes** (right): the repository as four steps (in the sandbox, the agent's work, review, on origin), with the next one highlighted; see below. Under it, the files this thread edited (click one to jump to the edit).
@@ -98,6 +99,14 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **How it connects:** over SSH through the gateway (`openshell ssh-proxy`); the sandbox exposes no port. The host entry `openshell-<sandbox>.default` lives in `~/.config/openshell/ssh_config`, which OpenShell includes from `~/.ssh/config`. The console adds a missing entry there; on a machine where that was never set up, it lets `openshell sandbox connect --editor vscode` do it the first time.
 - **VS Code Server:** the sandbox can't download it, so VS Code needs `"remote.SSH.localServerDownload": "always"`. The console tells you when it's missing and can add it.
 - **Terminal:** the sandbox needs the terminal policy (`policies/vscode-terminal.yaml`, which "New sandbox" uses); the console warns when it's missing.
+
+**Ports.** Opens what the agent serves in the sandbox in your browser, with `openshell forward`. The port is the same on this machine and in the sandbox, and is bound to 127.0.0.1 only. The button shows how many ports are forwarded.
+- **Forwarded:** each port with a link to open it, and **Stop**. It says when nothing listens on that port in the sandbox yet.
+- **Presets** from `server/ports.json`: the HyperFrames Studio (3002) and common dev servers (Vite 5173, 3000, 8000, 8080). A preset can be limited to some sandbox types with `"types"`. Each says whether something runs on it in the sandbox, and how to start it if not.
+- **Open in the sandbox:** the ports something listens on, with the program behind each when it can be told from its command line (the sandbox doesn't let one process see another's sockets). High ports (32768 and up) are usually the agent's own and are folded away.
+- **Another port:** any port from 1024 to 65535.
+- **A port in use on this machine** is refused before anything starts, with the program that has it (e.g. a HyperFrames Studio started on the host).
+- Forwards keep running when the console stops (`openshell forward list`, `openshell forward stop <port> <sandbox>`), and are stopped when the sandbox is deleted.
 
 **Working on a repository.** The **Changes** tab does what openshell-configs' `bundle.sh` does, plus the host side around it.
 - **Bring into sandbox:** give a URL (`git@github.com:you/app.git`, `https://…`) or a path on this machine (`~/code/app`). A URL is cloned here, into `~/sandbox-repos/<name>` unless you choose a directory, with your own git credentials. The base branch (origin's default unless you name one) goes into the sandbox as a git bundle: `/sandbox/<name>`, on branch `agent/<sandbox>`. New sessions in that sandbox start in that directory.
@@ -163,7 +172,7 @@ flowchart LR
   browser <-->|"WebSocket + token"| bridge
   bridge --- data
   bridge -->|"spawns"| cli
-  cli <-->|"gRPC: exec with ACP on stdio,<br/>upload, download, logs"| agent
+  cli <-->|"gRPC: exec with ACP on stdio,<br/>upload, download, logs, forward"| agent
   agent --- files
   agent -->|"allowed hosts only"| proxy
   proxy --> api
@@ -261,6 +270,7 @@ flowchart LR
 | Catalog | reads the catalog folders; fetches tools (npm, downloads) | unpacks a tar into `~/.claude`, `~/.config/opencode` or `~/.local` |
 | Sandbox types | `podman image inspect`, `make <image>` in openshell-configs, `openshell sandbox create` | |
 | VS Code | the SSH host entry, then `code --folder-uri vscode-remote://…` | |
+| Ports | `openshell forward start/stop/list` | reads `/proc/net/tcp` and command lines, to see what listens |
 
 ## Configuration
 
@@ -276,6 +286,7 @@ flowchart LR
 | `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. Threads (their conversations) are saved in a `threads/` folder next to it. |
 | `CONSOLE_REPOS` | Where repositories given as a URL are cloned. Default `~/sandbox-repos`. |
 | `CONSOLE_CATALOG` | Your catalog folder. Default `~/.config/sandbox-console/catalog`. |
+| `server/ports.json` | Port presets: port, label, how to start it, the sandbox types it's for, and text in the command line of the program that serves it. `CONSOLE_PORTS` points at another file. |
 | `CONSOLE_VSCODE`, `CONSOLE_CURSOR` | The editor's command line, if it isn't `code` / `cursor` on the PATH or in `/Applications`. |
 | `CONSOLE_TOKEN` | A fixed access token instead of a random one (at least 8 characters of `A-Z a-z 0-9 _ -`). Mainly for scripting and tests. |
 
@@ -322,6 +333,7 @@ server/              the bridge (Node, TypeScript, run with tsx)
   catalog.ts           the catalog: reading it, agent format conversion, copying into a sandbox
   tools.ts             catalog tools: fetched on the host (npm, or a checked download), launchers in ~/.local/bin
   types.ts             sandbox types: their images (checked and built with make) and policies
+  ports.ts             port forwards (openshell forward), what listens in the sandbox; presets in ports.json
   sandbox-types.json   sandbox type registry
   threadstore.ts       threads on disk
   validate.ts          shape checks for browser messages, sandbox name rules
@@ -360,7 +372,6 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
 ## Limitations
 - **Threads are saved on disk** and come back after a restart of the bridge, as exited threads you can resume (if the agent supports `session/load`).
 - **Long-running sessions** (hours, gateway restarts) are untested. When the agent process dies, the console shows its exit code and last output, and offers to start a new session.
-- **HyperFrames preview:** the console doesn't forward ports yet. Run `openshell forward start <port> <sandbox>` to watch the preview from your browser.
 - **Tools** are for Linux on arm64 and x64 sandboxes, and for programs that don't need root or a compiler.
 - **A sandbox's type** is fixed when it's created; to change it, create a new sandbox.
 

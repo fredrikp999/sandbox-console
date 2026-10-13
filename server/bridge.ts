@@ -22,6 +22,7 @@ import { type AgentConfig, agentInfo, findConfigs, findPolicy, loadAgents, State
 import * as editor from "./editor.ts";
 import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
+import * as ports from "./ports.ts";
 import * as repos from "./repos.ts";
 import { Session, type SessionHost, type Thread } from "./session.ts";
 import { type StoredThread, ThreadStore } from "./threadstore.ts";
@@ -47,6 +48,7 @@ export class Bridge implements SessionHost {
   readonly policy = findPolicy();
   readonly configs = findConfigs();
   readonly types = types.loadTypes();
+  readonly portPresets = ports.loadPresets();
   /** The image build running or last run; one at a time. */
   private build: ImageBuild | null = null;
   readonly editors = editor.availableEditors();
@@ -296,6 +298,10 @@ export class Bridge implements SessionHost {
       case "create_sandbox":
         return this.create(tab, msg);
 
+      case "ports":
+      case "forward":
+        return this.ports(tab, msg);
+
       case "sandbox_types":
         this.send(tab, {
           type: "sandbox_types",
@@ -348,6 +354,10 @@ export class Bridge implements SessionHost {
         this.sandbox(msg.name);
         this.sessions.get(msg.name)?.close();
         this.sessions.delete(msg.name);
+        // Its forwards would point at nothing.
+        for (const f of await ports.list().catch(() => [])) {
+          if (f.sandbox === msg.name) await ports.stop(msg.name, f.port, []).catch(() => {});
+        }
         await os.deleteSandbox(msg.name);
         this.state.forget(msg.name);
         this.purgeThreads(msg.name);
@@ -521,6 +531,38 @@ export class Bridge implements SessionHost {
       if (this.sessions.has(name)) log.push("New threads pick this up. A thread that's already running may not until the agent restarts.");
     }
     return reply(await catalog.list(), await look());
+  }
+
+  private async ports(tab: Tab, msg: Extract<ClientMessage, { type: "ports" | "forward" }>) {
+    const sb = this.sandbox(msg.sandbox);
+    const log: string[] = [];
+    if (msg.type === "forward") {
+      if (msg.op !== "start" && msg.op !== "stop") throw new Error(`Unknown forward action ${msg.op}`);
+      if (msg.op === "start") {
+        if (sb.phase !== "Ready") throw new Error(`Sandbox ${sb.name} is ${sb.phase}, not Ready.`);
+        await ports.start(sb.name, msg.port, log);
+      } else await ports.stop(sb.name, msg.port, log);
+    }
+    const [forwards, open] = await Promise.all([
+      ports.list().then((all) => all.filter((f) => f.sandbox === sb.name)),
+      sb.phase === "Ready"
+        ? ports
+            .listening(sb.name, this.portPresets)
+            .then((l) => ({ l }))
+            .catch((e: Explained) => ({ e }))
+        : Promise.resolve({ l: [] }),
+    ]);
+    const listening = "l" in open ? open.l : [];
+    this.send(tab, {
+      type: "ports",
+      reqId: msg.reqId,
+      sandbox: sb.name,
+      forwards,
+      listening,
+      presets: ports.presetsFor(this.portPresets, this.state.get(sb.name).type, listening),
+      log,
+      error: "e" in open ? `${open.e.message}${open.e.detail ? `: ${open.e.detail}` : ""}` : undefined,
+    });
   }
 
   /** Forget a thread, live or saved. False if there is no such thread. */

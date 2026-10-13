@@ -53,6 +53,27 @@ if (ROOT && a === "sandbox" && b === "exec" && args.includes("sh")) {
   // The bridge test reads back what it was asked to create.
   if (process.env.FAKE_CREATE_LOG) (await import("node:fs")).appendFileSync(process.env.FAKE_CREATE_LOG, `${JSON.stringify(args)}\n`);
   console.log(`Created sandbox ${args[args.indexOf("--name") + 1]}`);
+} else if (a === "forward") {
+  // Forwards are kept in FAKE_FORWARDS (a JSON file), so start, list and stop agree.
+  const fs = await import("node:fs");
+  const file = process.env.FAKE_FORWARDS;
+  const all = file && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
+  const save = (v) => file && fs.writeFileSync(file, JSON.stringify(v));
+  const [port, name] = args.slice(2).filter((x) => !x.startsWith("-"));
+  if (b === "list") out(all);
+  else if (b === "start") {
+    save([...all.filter((f) => f.port !== Number(port)), { alive: true, bind_address: "127.0.0.1", pid: 1, port: Number(port), sandbox: name }]);
+    console.log(`✓ Forwarding port ${port} to sandbox ${name} in the background`);
+    // Like the real one, -d leaves a process behind that holds stdout and stderr.
+    const { spawn } = await import("node:child_process");
+    spawn(process.execPath, ["-e", "setTimeout(() => {}, 15000)"], { detached: true, stdio: ["ignore", "inherit", "inherit"] }).unref();
+  } else if (b === "stop") {
+    if (!all.some((f) => f.port === Number(port))) {
+      console.error(`No forward on port ${port}`);
+      process.exit(1);
+    }
+    save(all.filter((f) => f.port !== Number(port)));
+  }
 } else if (a === "status") out({ gateway: "openshell", status: "connected", version: "fake" });
 else if (a === "sandbox" && b === "list") out({ sandboxes: SANDBOXES });
 else if (a === "sandbox" && b === "get") {

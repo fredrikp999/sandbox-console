@@ -305,6 +305,7 @@ class Store {
       case "editor_opened":
       case "catalog":
       case "sandbox_types":
+      case "ports":
         this.settle(m);
         if (m.type === "error" && !m.reqId) {
           const id = m.sessionId;
