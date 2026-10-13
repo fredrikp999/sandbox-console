@@ -6,16 +6,21 @@ A local web app for the coding agents in your [OpenShell](https://github.com/NVI
 - **Chat:** streamed replies, the agent's plan, its thinking, and a card for each tool call, with diffs for edits.
 - **Approvals:** permission requests appear as cards. You answer with the agent's own options, each labelled with what it actually does.
 - **Models and commands:** a searchable model picker (OpenRouter offers about 400 models) and a `/` menu with the agent's commands.
-- **Sessions keep running** when you close the tab, and the conversation is replayed when you come back. A sandbox can have several threads (conversations) side by side; switch between them or start a new one. Earlier threads can be reopened.
-- **Review:** files changed, hosts the sandbox reached or was denied, and the agent's commits downloaded as a git bundle.
+- **Sessions keep running** when you close the tab, and the conversation is replayed when you come back. A sandbox can have several threads (conversations) side by side, and threads are saved, so they survive a restart and can be resumed or deleted.
+- **Repositories:** bring a repository in (clone a URL or use a folder on this machine), get the agent's commits out, review the diff, merge into your branch and push. Only git bundles cross into the sandbox; credentials stay on this machine.
+- **Catalog:** add agents, skills, context files and command-line tools to a sandbox with one click.
+- **Sandbox types:** create a plain Claude Code or OpenCode sandbox, or one with a browser or HyperFrames, from images built on this machine, each with its own network policy.
+- **VS Code:** open a sandbox folder in VS Code (or Cursor) over Remote-SSH through the gateway.
+- **Activity:** hosts the sandbox reached or was denied, and what the agent was always allowed.
 
 The design is in [docs/DESIGN.md](docs/DESIGN.md), and [docs/mockup.html](docs/mockup.html) is a clickable mockup.
 
 ## Requirements
 
-- Node 22 or later.
+- Node 22 or later, and git.
 - `openshell` on your PATH, with a running gateway (`openshell status`).
-- Sandboxes, images and providers set up with [openshell-configs](https://github.com/fredrikp999/openshell-configs): the `opencode-sandbox` image with the `openrouter` provider, and/or `claude-sandbox` with `claude`.
+- Images, policies and providers from [openshell-configs](https://github.com/fredrikp999/openshell-configs), checked out on this machine (the console looks in `~/openshell-configs/openshell-configs`, or set `OPENSHELL_CONFIGS`): the `claude` provider for Claude Code and/or `openrouter` for OpenCode. Images can be built from the console's New sandbox dialog, with Podman (or Docker with `ENGINE=docker`).
+- Optional: VS Code (or Cursor) with the Remote-SSH extension.
 
 ## Quick start
 
@@ -86,7 +91,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works. × closes a tab; the thread stays in the sidebar.
 - **Sidebar:** under the selected sandbox, all its threads (open one, or delete it), and **Earlier from the agent…**: sessions the agent itself keeps, loaded with `session/load` as another thread.
 - **Changes** (right): the repository as four steps (in the sandbox, the agent's work, review, on origin), with the next one highlighted; see below. Under it, the files this thread edited (click one to jump to the edit).
-- **Catalog** (right): agents, skills and context files to add to the sandbox; see below.
+- **Catalog** (right): agents, skills, context files and tools to add to the sandbox, in sections that open with a click (a filter opens the ones that match); see below.
 - **Activity** (right): network this session, from `openshell logs` (the tab shows how many hosts were denied), and what the agent was always allowed.
 
 **VS Code.** Needs the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension and the `code` command (in VS Code: *Shell Command: Install 'code' command in PATH*; the console also looks in `/Applications`).
@@ -122,6 +127,141 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **What's in it:** the commits on the current branch of the session's directory that aren't in `host/main` or `host/master`. Those branches exist when the repo came in through openshell-configs' `bundle.sh in`; without them, the whole branch.
 - **Taking it into your repo:** `git fetch <file> <branch>:<branch>`, then review before you push.
 
+## Architecture
+
+The console has two parts on your machine. The **bridge** is a small Node server on 127.0.0.1. It holds the agent sessions, talks to OpenShell through the `openshell` CLI, and does the host-side work (git, the catalog, image builds). The **UI** is a React app in your browser, connected to the bridge over one WebSocket per tab.
+
+Each agent runs inside its sandbox. The bridge starts it with `openshell sandbox exec` and speaks [ACP](https://agentclientprotocol.com) (JSON-RPC) to it over that command's stdin and stdout, which the CLI carries to the sandbox over the gateway's gRPC connection. There is one agent process per sandbox; each thread is an ACP session on it. The agent's own traffic goes through OpenShell's policy proxy, which only lets it reach the hosts in the sandbox's policy and adds the real credential (the provider's API key or token) on the way out, so the credential never enters the sandbox.
+
+```mermaid
+flowchart LR
+  subgraph host["Your machine"]
+    direction TB
+    browser["Browser<br/>React UI"]
+    bridge["Bridge<br/>Node on 127.0.0.1"]
+    cli["openshell CLI"]
+    data[("~/.config/sandbox-console<br/>state, saved threads")]
+    repos[("Host repositories")]
+    catalog[("Catalog folders")]
+    configs["openshell-configs + Podman<br/>images and policies"]
+    vscode["VS Code<br/>Remote-SSH"]
+  end
+
+  subgraph gw["OpenShell gateway"]
+    direction TB
+    subgraph sb["Sandbox"]
+      agent["Agent in ACP mode<br/>Claude Code or OpenCode"]
+      files[("/sandbox")]
+    end
+    proxy["Policy proxy<br/>adds the credential"]
+  end
+
+  origin[("Git remote")]
+  api["Model API"]
+  pkgs["npm registry,<br/>release downloads"]
+
+  browser <-->|"WebSocket + token"| bridge
+  bridge --- data
+  bridge -->|"spawns"| cli
+  cli <-->|"gRPC: exec with ACP on stdio,<br/>upload, download, logs"| agent
+  agent --- files
+  agent -->|"allowed hosts only"| proxy
+  proxy --> api
+  bridge <-->|"git, bundles"| repos
+  repos <-->|"your credentials"| origin
+  bridge --- catalog
+  bridge -->|"tools are fetched here"| pkgs
+  bridge -->|"build, check images"| configs
+  configs -.->|"image + policy<br/>for a new sandbox"| sb
+  vscode -->|"ssh-proxy"| sb
+```
+
+**A turn.** The bridge relays ACP between the agent and the browser and keeps a numbered event log per thread. Every tab that shows the thread gets the events, and a tab that reconnects asks for everything after the last number it saw. The log is saved to disk, so threads survive a restart of the bridge. Permission requests become cards, and the bridge never answers them for you. Requests for files or a terminal on the host are refused.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor You
+  participant UI as Browser
+  participant B as Bridge
+  participant A as Agent (in the sandbox)
+  participant P as Policy proxy
+  participant M as Model API
+
+  You->>UI: type a prompt
+  UI->>B: prompt {sessionId, text}
+  B->>A: session/prompt (through openshell sandbox exec)
+  A->>P: model request
+  P->>M: with the real credential added
+  M-->>A: response
+  loop while the agent works
+    A-->>B: session/update (text, plan, tool calls, diffs)
+    B-->>UI: event with seq, to every tab on the thread
+  end
+  A->>B: session/request_permission
+  B-->>UI: permission card
+  You->>UI: pick an option
+  UI->>B: permission_answer
+  B-->>A: the chosen option
+  A->>B: fs/read_text_file
+  B-->>A: error -32601, no host access
+  A-->>B: prompt result (stopReason, usage)
+  B-->>UI: turn_end
+  Note over B: Events are logged per thread and saved to disk,<br/>so a tab that reconnects replays from its last seq.
+```
+
+**Code in and out.** The sandbox never gets your credentials or your other branches. The base branch goes in as a git bundle, and the agent's branch comes back out as one, verified before it's fetched. Pull, merge and push run on this machine.
+
+```mermaid
+flowchart LR
+  origin[("origin")]
+  subgraph host["Your machine"]
+    base["host repo<br/>base branch"]
+    branch["host repo<br/>agent/&lt;sandbox&gt;"]
+  end
+  subgraph sb["Sandbox"]
+    hostref["/sandbox/&lt;name&gt;<br/>host/&lt;base&gt;"]
+    work["agent/&lt;sandbox&gt;<br/>the agent's commits"]
+  end
+  origin -->|"1 clone or pull"| base
+  base -->|"2 bundle in"| hostref
+  hostref -->|"3 agent works"| work
+  work -->|"4 bundle out, verified"| branch
+  branch -->|"5 review, merge"| base
+  base -->|"6 push"| origin
+```
+
+**Software into a sandbox.** The sandbox's network policy never opens for an install. System software comes with the image of a sandbox type, built here. Tools from the catalog are fetched here, checked, and copied in.
+
+```mermaid
+flowchart LR
+  subgraph host["Your machine"]
+    dockerfile["openshell-configs<br/>Dockerfile + policy"]
+    image["Image<br/>built with make"]
+    def["Catalog tool<br/>tools/&lt;name&gt;.json"]
+    fetched["Fetched and checked<br/>npm integrity or SHA-256"]
+  end
+  subgraph sb["Sandbox"]
+    sys["System software<br/>FFmpeg, Chromium, CLIs"]
+    local["~/.local/bin<br/>launchers"]
+  end
+  dockerfile -->|"Build image"| image
+  image -->|"New sandbox of that type,<br/>with its policy"| sys
+  def --> fetched
+  fetched -->|"tar upload, no network<br/>for the sandbox"| local
+```
+
+**What the bridge runs, and where:**
+
+| | On this machine | In the sandbox (`openshell sandbox exec`) |
+|---|---|---|
+| Agent sessions | `openshell sandbox exec … <agent>` with ACP on stdio | the agent, with `~/.local/bin` on `PATH` |
+| Sandbox list, status, network | `openshell sandbox list/get`, `status`, `logs` | |
+| Repositories | git: clone, pull, bundle, verify, review, merge, push | git: fetch the bundle in, bundle the agent's branch out |
+| Catalog | reads the catalog folders; fetches tools (npm, downloads) | unpacks a tar into `~/.claude`, `~/.config/opencode` or `~/.local` |
+| Sandbox types | `podman image inspect`, `make <image>` in openshell-configs, `openshell sandbox create` | |
+| VS Code | the SSH host entry, then `code --folder-uri vscode-remote://…` | |
+
 ## Configuration
 
 | Setting | |
@@ -148,7 +288,9 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
   - **Headers:** `Host` and `Origin` are checked.
   - **`--open`:** hands the address to the browser through a private file, so other users can't read the token from the process list.
 - **Agent output is untrusted.** It's rendered as Markdown without HTML or remote images, under a strict Content Security Policy. Sandbox names and other input from the browser are checked before they reach the `openshell` CLI.
-- **Code leaves the sandbox only as git bundles you review.**
+- **Code leaves the sandbox only as git bundles you review.** Merging and pushing are separate buttons, and run on this machine.
+- **Installs don't widen the sandbox's network.** System software comes with an image you build; catalog tools are fetched on the host, pinned (exact npm version, or a SHA-256 for a download) and checked before they're copied in. npm runs with `--ignore-scripts`.
+- **Host-side work runs as you,** with your git credentials and network: cloning, pulling, pushing, fetching tools and building images. It only happens when you click for it, and git never prompts (`GIT_TERMINAL_PROMPT=0`, `ssh -o BatchMode=yes`).
 
 ## Development
 
@@ -218,6 +360,9 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
 ## Limitations
 - **Threads are saved on disk** and come back after a restart of the bridge, as exited threads you can resume (if the agent supports `session/load`).
 - **Long-running sessions** (hours, gateway restarts) are untested. When the agent process dies, the console shows its exit code and last output, and offers to start a new session.
+- **HyperFrames preview:** the console doesn't forward ports yet. Run `openshell forward start <port> <sandbox>` to watch the preview from your browser.
+- **Tools** are for Linux on arm64 and x64 sandboxes, and for programs that don't need root or a compiler.
+- **A sandbox's type** is fixed when it's created; to change it, create a new sandbox.
 
 ## License
 
