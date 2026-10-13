@@ -10,14 +10,17 @@
 // header on /api/*. The static UI itself holds no secrets and is public.
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { extname, join, normalize, sep } from "node:path";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { WebSocketServer } from "ws";
 import { Bridge } from "./bridge.ts";
 import { type Bundle, makeBundle } from "./bundle.ts";
 import { ROOT } from "./config.ts";
+import * as files from "./files.ts";
 import type { CliError } from "./openshell.ts";
 import type { Thread } from "./session.ts";
 
@@ -66,7 +69,9 @@ const SECURITY_HEADERS = {
   "X-Frame-Options": "DENY",
   "Cross-Origin-Resource-Policy": "same-origin",
   "Content-Security-Policy":
-    "default-src 'self'; connect-src 'self'; img-src 'self' data:; " +
+    // blob: is for previewing a file from the sandbox in the Files tab: images, audio and video play
+    // from a local copy, and nothing from the sandbox can run as script.
+    "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; " +
     "style-src 'self' 'unsafe-inline'; font-src 'self' data:; " +
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 };
@@ -146,6 +151,118 @@ async function serveBundle(url: URL, res: ServerResponse) {
   }
 }
 
+const PREVIEW_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".m4a": "audio/mp4",
+  ".flac": "audio/flac",
+};
+const TEXT_TYPES = new Set([
+  ".txt",
+  ".md",
+  ".json",
+  ".log",
+  ".csv",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".mjs",
+  ".css",
+  ".html",
+  ".xml",
+  ".py",
+  ".sh",
+]);
+
+/** What the browser should treat a file from the sandbox as: media it can play, text it can show, else opaque bytes. HTML is plain text here. */
+function typeFor(name: string) {
+  const ext = extname(name).toLowerCase();
+  return PREVIEW_TYPES[ext] ?? (TEXT_TYPES.has(ext) ? "text/plain; charset=utf-8" : "application/octet-stream");
+}
+
+function failure(res: ServerResponse, e: unknown, fallback = 500) {
+  const err = e as CliError & { status?: number };
+  reply(res, err.status ?? fallback, JSON.stringify({ message: err.message, detail: err.detail, hint: err.hint }), "application/json");
+}
+
+async function serveFile(url: URL, res: ServerResponse) {
+  let d: files.Download;
+  try {
+    const sandbox = bridge.readySandbox(url.searchParams.get("sandbox") ?? "");
+    d = await files.fetchOut(sandbox, files.cleanPath(url.searchParams.get("path")));
+  } catch (e) {
+    return failure(res, e);
+  }
+  res.on("close", () => void d.cleanup());
+  try {
+    res.writeHead(200, {
+      ...SECURITY_HEADERS,
+      "Content-Type": typeFor(d.name),
+      "Cache-Control": "no-store",
+      "Content-Length": d.size,
+      // Percent-encoded: names come from the sandbox and may not be Latin-1.
+      "X-File-Name": headerSafe(d.name),
+    });
+    createReadStream(d.file)
+      .on("error", () => res.destroy())
+      .pipe(res);
+  } catch (e) {
+    failure(res, e);
+  }
+}
+
+/** PUT /api/upload?sandbox=&dir=&name=[&overwrite=1]: the body is the file. */
+async function serveUpload(req: IncomingMessage, url: URL, res: ServerResponse) {
+  // Not a cookie, so another site can't borrow it, but a browser's own Origin says where this came from.
+  const origin = req.headers.origin;
+  if (origin && !ORIGINS.has(origin)) return failure(res, files.refused(403, "Not from this console's page."));
+  let dir: string | undefined;
+  try {
+    const length = Number(req.headers["content-length"]);
+    if (!Number.isFinite(length) || length < 0) throw files.refused(411, "The upload needs a Content-Length.");
+    if (length > files.MAX_UPLOAD)
+      throw files.refused(413, `Too big to upload here (${Math.round(length / 1e6)} MB; the limit is ${files.MAX_UPLOAD / 1e6} MB).`);
+    const sandbox = bridge.readySandbox(url.searchParams.get("sandbox") ?? "");
+    const folder = files.cleanPath(url.searchParams.get("dir"));
+    const name = files.cleanName(url.searchParams.get("name"));
+    if (url.searchParams.get("overwrite") !== "1" && (await files.exists(sandbox, `${folder}/${name}`))) {
+      throw files.refused(409, `${name} already exists in ${folder}.`);
+    }
+    dir = mkdtempSync(join(tmpdir(), "sandbox-console-upload-"));
+    const local = join(dir, name);
+    let seen = 0;
+    const guard = new Transform({
+      transform(chunk, _enc, cb) {
+        seen += chunk.length;
+        cb(seen > length ? new Error("The body is longer than its Content-Length.") : null, chunk);
+      },
+    });
+    await pipeline(req, guard, createWriteStream(local));
+    if (seen !== length) throw files.refused(400, "The upload was cut short.");
+    await files.putIn(sandbox, local, folder);
+    reply(res, 200, JSON.stringify({ ok: true, path: `${folder}/${name}`, size: seen }), "application/json");
+  } catch (e) {
+    req.resume();
+    failure(res, e, 500);
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function serveStatic(req: IncomingMessage, url: URL, res: ServerResponse) {
   let path: string;
   try {
@@ -178,7 +295,9 @@ function handle(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
   if (url.pathname.startsWith("/api/")) {
     if (!bearer(req)) return reply(res, 401, JSON.stringify({ message: "Missing or wrong access token." }), "application/json");
+    if (url.pathname === "/api/upload" && req.method === "PUT") return void serveUpload(req, url, res);
     if (req.method !== "GET") return reply(res, 405, "Method not allowed");
+    if (url.pathname === "/api/file") return void serveFile(url, res);
     if (url.pathname === "/api/ping") return reply(res, 200, "{}", "application/json");
     if (url.pathname === "/api/bundle") return void serveBundle(url, res);
     return reply(res, 404, "Not found");
@@ -199,7 +318,8 @@ const server = createServer((req, res) => {
 
 const wss = new WebSocketServer({
   noServer: true,
-  maxPayload: 4 * 1024 * 1024,
+  // A prompt can carry a few images (about 6 MB of base64 each at most; see validate.ts).
+  maxPayload: 28 * 1024 * 1024,
   handleProtocols: (protocols) => (protocols.has(WS_PROTOCOL) ? WS_PROTOCOL : false),
 });
 server.on("upgrade", (req, socket, head) => {

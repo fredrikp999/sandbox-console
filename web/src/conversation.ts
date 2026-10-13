@@ -50,13 +50,14 @@ export interface PermissionItem {
 }
 
 export type Item =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; images?: { mimeType: string; thumb: string }[] }
   | { kind: "agent"; text: string }
   | { kind: "thought"; text: string }
   | { kind: "plan"; entries: PlanEntry[] }
   | ToolItem
   | PermissionItem
   | { kind: "notice"; text: string }
+  | { kind: "port"; port: number; command?: string; label?: string }
   | { kind: "error"; message: string; detail?: string; hint?: string }
   | { kind: "turn_end"; stopReason: string; ms?: number }
   | { kind: "closed"; exitCode: number | null; stderrTail: string[]; hint?: string };
@@ -173,7 +174,7 @@ export function apply(prev: Conversation, ev: SessionEvent): Conversation {
   const c: Conversation = { ...prev, items: prev.items.slice() };
   switch (ev.type) {
     case "user_message":
-      c.items.push({ kind: "user", text: ev.text });
+      c.items.push({ kind: "user", text: ev.text, ...(ev.images?.length ? { images: ev.images } : {}) });
       break;
     case "turn_start":
       c.turnStartedAt = ev.ts;
@@ -187,6 +188,9 @@ export function apply(prev: Conversation, ev: SessionEvent): Conversation {
       break;
     case "notice":
       c.items.push({ kind: "notice", text: ev.text });
+      break;
+    case "port_open":
+      c.items.push({ kind: "port", port: ev.port, command: ev.command, label: ev.label });
       break;
     case "session_error":
       c.items.push({ kind: "error", message: ev.message, detail: ev.detail, hint: ev.hint });

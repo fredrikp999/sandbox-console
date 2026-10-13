@@ -1,6 +1,6 @@
 // End-to-end through the real bridge, with test/fixtures/fake-openshell.mjs as the CLI.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
@@ -32,6 +32,8 @@ before(async () => {
       FAKE_IMAGES: "claude-sandbox:latest,claude-browser:latest",
       FAKE_CREATE_LOG: createLog,
       FAKE_FORWARDS: join(configs, "forwards.json"),
+      FAKE_RULES: join(configs, "rules.json"),
+      FAKE_RULES_LOG: join(configs, "rules.log"),
     },
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -302,13 +304,14 @@ test("a sandbox can have several threads that run independently", async () => {
 });
 
 /** A second bridge on its own port, sharing a state directory, so the first can "restart". */
-async function startBridge(port: number, stateDir: string) {
+async function startBridge(port: number, stateDir: string, extraEnv: Record<string, string> = {}) {
   const child = spawn(process.execPath, ["--import", "tsx", join(ROOT, "server/index.ts"), "--port", String(port)], {
     env: {
       ...process.env,
       OPENSHELL_BIN: join(ROOT, "test/fixtures/fake-openshell.mjs"),
       CONSOLE_TOKEN: TOKEN,
       CONSOLE_STATE: join(stateDir, "state.json"),
+      ...extraEnv,
     },
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -474,5 +477,275 @@ test("ports: forward, list, refuse a port in use here, stop", async () => {
 
   c.send({ type: "forward", reqId: "f5", sandbox: "opencode-demo", op: "stop", port });
   assert.deepEqual((await c.next((m) => m.reqId === "f5")).forwards, []);
+  c.ws.close();
+});
+
+test("the bridge says when its code on disk changed since it started", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sc-code-"));
+  mkdirSync(join(dir, "server"));
+  mkdirSync(join(dir, "shared"));
+  writeFileSync(join(dir, "server", "a.ts"), "export const a = 1;\n");
+  writeFileSync(join(dir, "server", "a.test.ts"), "// tests don't count\n");
+  const port = PORT + 150;
+  const child = spawn(process.execPath, ["--import", "tsx", join(ROOT, "server/index.ts"), "--port", String(port)], {
+    env: {
+      ...process.env,
+      OPENSHELL_BIN: join(ROOT, "test/fixtures/fake-openshell.mjs"),
+      CONSOLE_TOKEN: TOKEN,
+      CONSOLE_STATE: join(mkdtempSync(join(tmpdir(), "sc-test-")), "state.json"),
+      CONSOLE_WATCH: dir,
+      CONSOLE_BUILD_CHECK_MS: "200",
+    },
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  extra.push(child);
+  await new Promise<void>((resolve) => child.stdout!.on("data", (d) => String(d).includes("running") && resolve()));
+  const c = connect({ port });
+  await c.opened;
+  const hello = await c.next((m) => m.type === "hello");
+  assert.match(hello.build.protocol, /^[0-9a-f]{12}$/);
+  assert.equal(hello.build.stale, false);
+
+  writeFileSync(join(dir, "server", "a.test.ts"), "// still not counted\n");
+  await new Promise((r) => setTimeout(r, 600));
+  assert.ok(!c.inbox.some((m) => m.type === "server_build"));
+
+  writeFileSync(join(dir, "server", "a.ts"), "export const a = 2;\n");
+  assert.equal((await c.next((m) => m.type === "server_build")).build.stale, true);
+  // Put back, it's the code that was loaded again.
+  writeFileSync(join(dir, "server", "a.ts"), "export const a = 1;\n");
+  await c.next((m) => m.type === "server_build" && m.build.stale === false);
+  c.ws.close();
+});
+
+test("rules: proposed network rules are listed, and approved or rejected one at a time", async () => {
+  writeFileSync(
+    join(configs, "rules.json"),
+    JSON.stringify([
+      { id: "329ecc4c-c76f-418d-bd5b-c5915a12665a", host: "cdn.jsdelivr.net", port: 443, binary: "/usr/local/bin/node", hits: 10 },
+      { id: "004a03b7-c765-46b2-a604-d73c5aba1f73", host: "api.github.com", port: 443, binary: "/usr/lib/git-core/git-remote-http" },
+    ]),
+  );
+  const c = connect();
+  await c.opened;
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+  c.send({ type: "rules", reqId: "r1", sandbox: "opencode-demo" });
+  const first = await c.next((m) => m.reqId === "r1");
+  assert.equal(first.rules.length, 2);
+  const [node, git] = first.rules;
+  assert.deepEqual(node.endpoints, [{ host: "cdn.jsdelivr.net", port: 443, mode: "L4" }]);
+  assert.equal(node.hits, 10);
+  assert.equal(node.shared, true, "node is something many programs run as");
+  assert.equal(git.shared, false);
+
+  c.send({ type: "rules", reqId: "r2", sandbox: "opencode-demo", op: "approve", chunkId: node.id });
+  const after = await c.next((m) => m.reqId === "r2");
+  assert.deepEqual(
+    after.rules.map((r: any) => r.id),
+    [git.id],
+  );
+  assert.match(after.log[0], /Allowed/);
+
+  c.send({ type: "rules", reqId: "r3", sandbox: "opencode-demo", op: "reject", chunkId: git.id });
+  assert.deepEqual((await c.next((m) => m.reqId === "r3")).rules, []);
+  assert.deepEqual(readFileSync(join(configs, "rules.log"), "utf8").trim().split("\n"), [`approve ${node.id}`, `reject ${git.id}`]);
+
+  // What reaches the CLI is checked first.
+  c.send({ type: "rules", reqId: "r4", sandbox: "opencode-demo", op: "approve", chunkId: "--status" });
+  assert.match((await c.next((m) => m.reqId === "r4")).message, /Not a rule id/);
+  c.send({ type: "rules", reqId: "r5", sandbox: "opencode-demo", op: "delete" as any, chunkId: node.id });
+  assert.match((await c.next((m) => m.reqId === "r5")).message, /Unknown rule action/);
+  c.ws.close();
+});
+
+test("files: browse, download (files and folders), upload, and what's refused", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sc-files-"));
+  const box = join(dir, "sandbox");
+  mkdirSync(join(box, "videos", "reel", "renders"), { recursive: true });
+  writeFileSync(join(box, "videos", "reel", "renders", "video.mp4"), Buffer.from("not really a video"));
+  writeFileSync(join(box, "videos", "reel", "index.html"), "<h1>hi</h1>");
+  writeFileSync(join(box, "videos", "reel", ".hidden"), "x");
+  writeFileSync(join(box, "videos", "reel", "ünï code.txt"), "unicode name");
+  const port = PORT + 160;
+  await startBridge(port, dir, { FAKE_SANDBOX_ROOT: box });
+  const base = `http://127.0.0.1:${port}`;
+  const c = connect({ port });
+  await c.opened;
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+
+  c.send({ type: "files", reqId: "l1", sandbox: "opencode-demo", path: "/sandbox/videos/reel" });
+  const listing = await c.next((m) => m.reqId === "l1");
+  const by = Object.fromEntries(listing.entries.map((e: any) => [e.name, e]));
+  assert.equal(by.renders.kind, "dir");
+  assert.equal(by["index.html"].kind, "file");
+  assert.equal(by["index.html"].size, 11);
+  assert.ok(by[".hidden"], "hidden files are listed; the page hides them");
+  assert.equal(by["ünï code.txt"].kind, "file");
+  assert.ok(by["index.html"].mtime > 1_700_000_000);
+
+  c.send({ type: "files", reqId: "l2", sandbox: "opencode-demo", path: "/sandbox/../etc" });
+  assert.match((await c.next((m) => m.reqId === "l2")).message, /Only files under \/sandbox/);
+  c.send({ type: "files", reqId: "l3", sandbox: "opencode-demo", path: "/sandbox/nope" });
+  assert.match((await c.next((m) => m.reqId === "l3")).message, /isn't a folder/);
+
+  // Download a file, a file with a non-Latin-1 name, and a folder as a tar.
+  const get = (path: string) => fetch(`${base}/api/file?sandbox=opencode-demo&path=${encodeURIComponent(path)}`, { headers: AUTH });
+  const video = await get("/sandbox/videos/reel/renders/video.mp4");
+  assert.equal(video.status, 200);
+  assert.equal(video.headers.get("content-type"), "video/mp4");
+  assert.equal(await video.text(), "not really a video");
+  const uni = await get("/sandbox/videos/reel/ünï code.txt");
+  assert.equal(decodeURIComponent(uni.headers.get("x-file-name") ?? ""), "ünï code.txt");
+  assert.equal(await uni.text(), "unicode name");
+  const html = await get("/sandbox/videos/reel/index.html");
+  assert.match(html.headers.get("content-type") ?? "", /^text\/plain/, "html from the sandbox is never served as html");
+  const folder = await get("/sandbox/videos/reel/renders");
+  assert.equal(decodeURIComponent(folder.headers.get("x-file-name") ?? ""), "renders.tar");
+  const tarFile = join(dir, "renders.tar");
+  writeFileSync(tarFile, Buffer.from(await folder.arrayBuffer()));
+  assert.match(execFileSync("tar", ["-tf", tarFile], { encoding: "utf8" }), /renders\/video\.mp4/);
+  assert.deepEqual(
+    (await import("node:fs")).readdirSync(box).filter((f) => f.startsWith(".sandbox-console")),
+    [],
+    "the tar made in the sandbox is removed",
+  );
+  assert.equal((await get("/sandbox/videos/reel/missing.mp4")).status, 404);
+  assert.equal((await get("/etc/passwd")).status, 400);
+  assert.equal((await get("/sandbox/../etc/passwd")).status, 400);
+  assert.equal((await fetch(`${base}/api/file?sandbox=opencode-demo&path=/sandbox`)).status, 401);
+
+  // Upload: refused over an existing name unless asked, and only with a good name.
+  const put = (name: string, body: string, extra = "") =>
+    fetch(`${base}/api/upload?sandbox=opencode-demo&dir=${encodeURIComponent("/sandbox/videos/reel")}&name=${encodeURIComponent(name)}${extra}`, {
+      method: "PUT",
+      headers: { ...AUTH, "Content-Type": "application/octet-stream" },
+      body,
+    });
+  const up = await put("logo.png", "PNGDATA");
+  assert.equal(up.status, 200);
+  assert.equal(readFileSync(join(box, "videos", "reel", "logo.png"), "utf8"), "PNGDATA");
+  const again = await put("logo.png", "NEWER");
+  assert.equal(again.status, 409);
+  assert.match(((await again.json()) as { message: string }).message, /already exists/);
+  assert.equal(readFileSync(join(box, "videos", "reel", "logo.png"), "utf8"), "PNGDATA");
+  assert.equal((await put("logo.png", "NEWER", "&overwrite=1")).status, 200);
+  assert.equal(readFileSync(join(box, "videos", "reel", "logo.png"), "utf8"), "NEWER");
+  assert.equal((await put("../escape.txt", "x")).status, 400);
+  assert.equal((await put("-rf", "x")).status, 400);
+  assert.equal(
+    (
+      await fetch(`${base}/api/upload?sandbox=opencode-demo&dir=/sandbox&name=a.txt`, {
+        method: "PUT",
+        headers: { ...AUTH, Origin: "http://evil.example" },
+        body: "x",
+      })
+    ).status,
+    403,
+  );
+  assert.ok(!existsSync(join(box, "escape.txt")));
+  c.ws.close();
+});
+
+test("ports: a server that starts while the agent works is announced in its thread, once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sc-announce-"));
+  const listen = join(dir, "listen");
+  // A preset on a port nothing else here uses (a forward needs it free on this machine).
+  const P = 20000 + Math.floor(Math.random() * 5000);
+  const hex = P.toString(16).toUpperCase().padStart(4, "0");
+  writeFileSync(join(dir, "ports.json"), JSON.stringify([{ port: P, label: "HyperFrames Studio", match: "hyperframes preview" }]));
+  writeFileSync(listen, "L 1F90\nC python3 -m http.server 8080\n"); // 8080 is already up: not news
+  const port = PORT + 170;
+  await startBridge(port, dir, {
+    FAKE_LISTEN: listen,
+    FAKE_FORWARDS: join(dir, "forwards.json"),
+    CONSOLE_PORTS: join(dir, "ports.json"),
+    CONSOLE_PORT_LOOK_MS: "200",
+  });
+  const c = connect({ port });
+  await c.opened;
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+  c.send({ type: "open_session", reqId: "o", sandbox: "opencode-demo", agent: "opencode", cwd: "/sandbox/myrepo" });
+  const sid = (await c.next((m) => m.type === "session_opened" && m.reqId === "o")).session.sessionId;
+  c.send({ type: "subscribe", sessionId: sid, sinceSeq: 0 });
+  await c.next((m) => m.type === "replay_done" && m.sessionId === sid);
+  await new Promise((r) => setTimeout(r, 600)); // the look at the start
+  const announced = () => c.inbox.filter((m) => m.type === "port_open").map((m) => m.port);
+
+  /** A turn of the fake agent, stopped at its permission request (which ends it, and looks at the ports again). */
+  let turns = 0;
+  const turn = async () => {
+    const had = c.inbox.filter((m) => m.type === "turn_end").length;
+    c.send({ type: "prompt", sessionId: sid, text: `turn ${++turns}` });
+    await c.next(() => c.inbox.filter((m) => m.type === "permission_request").length === turns);
+    c.send({ type: "cancel", sessionId: sid });
+    await c.next(() => c.inbox.filter((m) => m.type === "turn_end").length > had);
+    await new Promise((r) => setTimeout(r, 800));
+  };
+  const withStudio = `L 1F90\nL ${hex}\nL A1B2\nC python3 -m http.server 8080\nC /usr/local/bin/node /usr/local/bin/hyperframes preview --foreground\n`;
+
+  // The Studio comes up during a turn, and some high port that isn't worth mentioning.
+  writeFileSync(listen, withStudio);
+  await turn();
+  const open = c.inbox.find((m) => m.type === "port_open");
+  assert.equal(open.port, P);
+  assert.equal(open.label, "HyperFrames Studio");
+  assert.match(open.command, /hyperframes preview/);
+  assert.deepEqual(announced(), [P], "8080 was there before, and the high port is the agent's own");
+
+  // Still running at the next turn: no repeat.
+  await turn();
+  assert.deepEqual(announced(), [P]);
+
+  // Stopped, then started again, it's news again, unless it's forwarded by then.
+  writeFileSync(listen, "L 1F90\nC python3 -m http.server 8080\n");
+  await turn();
+  c.send({ type: "forward", reqId: "f", sandbox: "opencode-demo", op: "start", port: P });
+  assert.equal((await c.next((m) => m.reqId === "f")).forwards.length, 1);
+  c.send({ type: "forward", reqId: "f2", sandbox: "opencode-demo", op: "start", port: P });
+  assert.match((await c.next((m) => m.reqId === "f2")).log[0], /already forwarded/);
+  writeFileSync(listen, withStudio);
+  await turn();
+  assert.deepEqual(announced(), [P], "a forwarded port isn't offered again");
+  c.ws.close();
+});
+
+test("images: sent to the agent as image blocks, kept in the conversation as thumbnails, refused when malformed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "sc-images-"));
+  const port = PORT + 180;
+  await startBridge(port, dir);
+  const c = connect({ port });
+  await c.opened;
+  await c.next((m) => m.type === "sandboxes" && m.sandboxes.length);
+  c.send({ type: "open_session", reqId: "o", sandbox: "opencode-demo", agent: "opencode", cwd: "/sandbox/myrepo" });
+  const opened = await c.next((m) => m.type === "session_opened" && m.reqId === "o");
+  assert.equal(opened.session.promptImages, true);
+  const sid = opened.session.sessionId;
+  c.send({ type: "subscribe", sessionId: sid, sinceSeq: 0 });
+  await c.next((m) => m.type === "replay_done" && m.sessionId === sid);
+
+  const png = Buffer.from("PNGFAKE").toString("base64");
+  const thumb = Buffer.from("JPEGTHUMB").toString("base64");
+  c.send({ type: "prompt", sessionId: sid, text: "what is this", images: [{ mimeType: "image/png", data: png, thumb }] });
+  const user = await c.next((m) => m.type === "user_message" && m.sessionId === sid);
+  assert.deepEqual(user.images, [{ mimeType: "image/png", thumb }], "the full image isn't kept in the log");
+  const heard = await c.next((m) => m.type === "event" && m.update?.content?.text?.startsWith("Got 1 image(s)"));
+  assert.match(heard.update.content.text, /image\/png 7 bytes/);
+  await c.next((m) => m.type === "permission_request" && m.sessionId === sid);
+  c.send({ type: "cancel", sessionId: sid });
+  await c.next((m) => m.type === "turn_end" && m.sessionId === sid);
+
+  // Only an image, no text: allowed. Neither: refused.
+  c.send({ type: "prompt", sessionId: sid, text: "", images: [{ mimeType: "image/png", data: png, thumb }] });
+  assert.equal((await c.next((m) => m.type === "user_message" && m.sessionId === sid && m.seq > user.seq)).text, "");
+  await c.next((m) => m.type === "permission_request" && m.sessionId === sid && c.inbox.filter((x) => x.type === "permission_request").length === 2);
+  c.send({ type: "cancel", sessionId: sid });
+  await c.next(() => c.inbox.filter((m) => m.type === "turn_end").length === 2);
+  c.send({ type: "prompt", sessionId: sid, text: "  " });
+  assert.match((await c.next((m) => m.type === "error" && m.sessionId === sid)).message, /attach an image/);
+
+  // Not a picture, or not base64: refused before it reaches the agent.
+  c.send({ type: "prompt", sessionId: sid, text: "x", images: [{ mimeType: "image/svg+xml", data: png, thumb }] });
+  assert.match((await c.next((m) => m.type === "error" && /prompt\.images/.test(m.message))).message, /Bad message/);
+  assert.equal(c.inbox.filter((m) => m.type === "user_message").length, 2, "the refused one never became a message");
   c.ws.close();
 });

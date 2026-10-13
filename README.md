@@ -12,7 +12,9 @@ A local web app for the coding agents in your [OpenShell](https://github.com/NVI
 - **Sandbox types:** create a plain Claude Code or OpenCode sandbox, or one with a browser or HyperFrames, from images built on this machine, each with its own network policy.
 - **VS Code:** open a sandbox folder in VS Code (or Cursor) over Remote-SSH through the gateway.
 - **Ports:** forward a port of the sandbox to this machine, to open what the agent serves (the HyperFrames Studio, a dev server) in your browser.
-- **Activity:** hosts the sandbox reached or was denied, and what the agent was always allowed.
+- **Files:** browse the sandbox's files, look at an image, video or text file, download a file or a folder, and upload files. Rendered videos and other results come out this way, not only git commits.
+- **Activity:** hosts the sandbox reached or was denied, the rules OpenShell proposes for blocked connections (you approve or reject each), and what the agent was always allowed.
+- **Images:** paste, drop or attach an image to a message ("make it look like this").
 
 The design is in [docs/DESIGN.md](docs/DESIGN.md), and [docs/mockup.html](docs/mockup.html) is a clickable mockup.
 
@@ -92,19 +94,39 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works. × closes a tab; the thread stays in the sidebar.
 - **Sidebar:** under the selected sandbox, all its threads (open one, or delete it), and **Earlier from the agent…**: sessions the agent itself keeps, loaded with `session/load` as another thread.
 - **Changes** (right): the repository as four steps (in the sandbox, the agent's work, review, on origin), with the next one highlighted; see below. Under it, the files this thread edited (click one to jump to the edit).
+- **Files** (right): the sandbox's files under `/sandbox`; see below.
 - **Catalog** (right): agents, skills, context files and tools to add to the sandbox, in sections that open with a click (a filter opens the ones that match); see below.
-- **Activity** (right): network this session, from `openshell logs` (the tab shows how many hosts were denied), and what the agent was always allowed.
+- **Activity** (right): the blocked connections waiting for your decision (the tab shows how many), network this session from `openshell logs`, and what the agent was always allowed; see below.
+- **Restart notice:** if the console's code on disk is newer than what's running, a bar at the top says to restart it. (Otherwise the page can be new and the server old, and new buttons fail in confusing ways.) It also says when the page itself is from a different version and should be reloaded.
 
 **VS Code.** Needs the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension and the `code` command (in VS Code: *Shell Command: Install 'code' command in PATH*; the console also looks in `/Applications`).
 - **How it connects:** over SSH through the gateway (`openshell ssh-proxy`); the sandbox exposes no port. The host entry `openshell-<sandbox>.default` lives in `~/.config/openshell/ssh_config`, which OpenShell includes from `~/.ssh/config`. The console adds a missing entry there; on a machine where that was never set up, it lets `openshell sandbox connect --editor vscode` do it the first time.
 - **VS Code Server:** the sandbox can't download it, so VS Code needs `"remote.SSH.localServerDownload": "always"`. The console tells you when it's missing and can add it.
 - **Terminal:** the sandbox needs the terminal policy (`policies/vscode-terminal.yaml`, which "New sandbox" uses); the console warns when it's missing.
 
+**Images in messages.** If the agent takes images (Claude Code does), the message box has an attach button, and you can also paste a screenshot (<kbd>⌘V</kbd>) or drop image files on it. Up to 4 per message.
+- The page scales them down to 1568 px on the long side (what Claude shrinks them to anyway) and keeps PNGs as PNG while they're small; the agent gets that copy.
+- The conversation keeps only a 220 px thumbnail of each, so saved threads stay small.
+- The bridge only accepts PNG, JPEG, GIF and WebP, checked as base64 and size-limited, and rebuilds the message from the known fields.
+
+**Files.** The Files tab is for what git bundles don't cover, like a rendered video or assets for one.
+- **Browse:** it starts in the thread's directory; click a folder to open it, the path above to go up. Hidden files are behind a checkbox, and you can sort by name or newest first.
+- **Look at it:** images, video, audio and text (up to 40 MB, 250 MB, 100 MB and 2 MB) open in a preview. It plays from a local copy, so the page's content security policy only needs `blob:` for images and media; nothing from the sandbox runs as script, and HTML is shown as text.
+- **Download:** a file as it is, or a folder as a `.tar` (made in the sandbox, downloaded, and removed). Up to 1 GB.
+- **Upload:** choose files, or drop them on the list, into the folder you're looking at. A name that exists asks before replacing it. Up to 500 MB each.
+- **Limits:** only `/sandbox` (the only place `openshell sandbox download` reads from), paths are checked, and file names for uploads can't contain `/` or start with `-`. Files come over `/api/file` and `/api/upload`, which need the access token in a header like everything else, and uploads check the request's `Origin`.
+
+**Blocked connections.** When something in the sandbox is denied, OpenShell proposes a rule. The Activity tab lists them (`openshell rule get --status pending`, read every 20 s), with the program, how many attempts, and OpenShell's reasoning under Details.
+- **Allow…** asks first and says exactly what it would allow. If the program is one that many things run as (`node`, `python`, `curl`, `git`, …), it says so, because everything run as that program, including the agent, gets the access. Then **Allow** runs `openshell rule approve` for that one proposal.
+- **Reject** runs `openshell rule reject`. OpenShell proposes it again if something tries that connection again.
+- The console never approves anything by itself, and there is no "allow all".
+
 **Ports.** Opens what the agent serves in the sandbox in your browser, with `openshell forward`. The port is the same on this machine and in the sandbox, and is bound to 127.0.0.1 only. The button shows how many ports are forwarded.
 - **Forwarded:** each port with a link to open it, and **Stop**. It says when nothing listens on that port in the sandbox yet.
 - **Presets** from `server/ports.json`: the HyperFrames Studio (3002) and common dev servers (Vite 5173, 3000, 8000, 8080). A preset can be limited to some sandbox types with `"types"`. Each says whether something runs on it in the sandbox, and how to start it if not.
 - **Open in the sandbox:** the ports something listens on, with the program behind each when it can be told from its command line (the sandbox doesn't let one process see another's sockets). High ports (32768 and up) are usually the agent's own and are folded away.
 - **Another port:** any port from 1024 to 65535.
+- **Offered when it starts:** when a tool call or a turn ends, the console looks at what listens in the sandbox. A server that wasn't there before (not a high port, not already forwarded) gets a card in that thread: "HyperFrames Studio started on port 3002", with **Forward port**, then a link to open it. What was already running when the agent started isn't announced.
 - **A port in use on this machine** is refused before anything starts, with the program that has it (e.g. a HyperFrames Studio started on the host).
 - Forwards keep running when the console stops (`openshell forward list`, `openshell forward stop <port> <sandbox>`), and are stopped when the sandbox is deleted.
 
@@ -271,6 +293,9 @@ flowchart LR
 | Sandbox types | `podman image inspect`, `make <image>` in openshell-configs, `openshell sandbox create` | |
 | VS Code | the SSH host entry, then `code --folder-uri vscode-remote://…` | |
 | Ports | `openshell forward start/stop/list` | reads `/proc/net/tcp` and command lines, to see what listens |
+| Files | streams downloads and uploads to and from the browser; `openshell sandbox download/upload` | lists folders with `stat`, packs a folder with `tar`, checks sizes |
+| Blocked connections | `openshell rule get/approve/reject` | |
+| Images | | the agent receives them as ACP image blocks |
 
 ## Configuration
 
@@ -299,7 +324,8 @@ flowchart LR
   - **Headers:** `Host` and `Origin` are checked.
   - **`--open`:** hands the address to the browser through a private file, so other users can't read the token from the process list.
 - **Agent output is untrusted.** It's rendered as Markdown without HTML or remote images, under a strict Content Security Policy. Sandbox names and other input from the browser are checked before they reach the `openshell` CLI.
-- **Code leaves the sandbox only as git bundles you review.** Merging and pushing are separate buttons, and run on this machine.
+- **Code leaves the sandbox as git bundles you review.** Merging and pushing are separate buttons, and run on this machine. Other files leave only when you click download in the Files tab, from `/sandbox`.
+- **Nothing widens the sandbox without your click.** Proposed network rules are approved one at a time, after a confirmation that says who else gets the access.
 - **Installs don't widen the sandbox's network.** System software comes with an image you build; catalog tools are fetched on the host, pinned (exact npm version, or a SHA-256 for a download) and checked before they're copied in. npm runs with `--ignore-scripts`.
 - **Host-side work runs as you,** with your git credentials and network: cloning, pulling, pushing, fetching tools and building images. It only happens when you click for it, and git never prompts (`GIT_TERMINAL_PROMPT=0`, `ssh -o BatchMode=yes`).
 
@@ -334,6 +360,9 @@ server/              the bridge (Node, TypeScript, run with tsx)
   tools.ts             catalog tools: fetched on the host (npm, or a checked download), launchers in ~/.local/bin
   types.ts             sandbox types: their images (checked and built with make) and policies
   ports.ts             port forwards (openshell forward), what listens in the sandbox; presets in ports.json
+  files.ts             browse, download and upload files under /sandbox
+  rules.ts             network rules OpenShell proposes: parse, approve, reject
+  build.ts             hashes of the protocol and the server's code, for the restart notice
   sandbox-types.json   sandbox type registry
   threadstore.ts       threads on disk
   validate.ts          shape checks for browser messages, sandbox name rules
@@ -346,10 +375,12 @@ web/                 React UI (Vite)
   src/store.ts         WebSocket, reconnect + replay, request/response
   src/auth.ts          the access token
   src/panels.ts        which side panels are shown
+  src/files.ts         download, upload and preview helpers for the Files tab
+  src/images.ts        scaling images for prompts
   src/components/      Sidebar, Chat, ConversationLog, Composer, ModelPicker, Inspector, …
   vite.config.ts       UI build and dev server
 catalog/             built-in catalog examples: agents, skills, context files, tools
-test/fixtures/       fake `openshell` CLI with a scripted agent, and a fake container engine
+test/fixtures/       fake `openshell` CLI with a scripted agent (also forwards, rules, listening ports and, with FAKE_SANDBOX_ROOT, a real folder as /sandbox), and a fake container engine
 docs/                design and mockup
 ```
 
@@ -374,6 +405,8 @@ TypeScript has one project per part: `server/tsconfig.json` (Node, no DOM), `web
 - **Long-running sessions** (hours, gateway restarts) are untested. When the agent process dies, the console shows its exit code and last output, and offers to start a new session.
 - **Tools** are for Linux on arm64 and x64 sandboxes, and for programs that don't need root or a compiler.
 - **A sandbox's type** is fixed when it's created; to change it, create a new sandbox.
+- **Large files:** a download is held in the browser's memory before it's saved, so very big ones are slow and heavy; the limit is 1 GB, and previews are limited to a few hundred MB.
+- **Images** only go to agents that say they take them in prompts. A thread saved from before this feature shows no attach button until you resume it.
 
 ## License
 

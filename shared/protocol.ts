@@ -12,6 +12,14 @@ export interface AgentInfo {
   hasModelEnv: boolean;
 }
 
+/** Which code the bridge runs, to tell the page when it needs a restart. */
+export interface ServerBuild {
+  /** Hash of shared/protocol.ts as the bridge loaded it; the page compares it with its own. */
+  protocol: string;
+  /** The code on disk has changed since the bridge started. */
+  stale: boolean;
+}
+
 /** What the session is doing, as shown by the status pill. */
 export type ActivityState = "starting" | "working" | "waiting" | "idle" | "dead";
 
@@ -146,6 +154,33 @@ export interface PortPreset {
   hint?: string;
 }
 
+/** One thing in a sandbox folder. */
+export interface FileEntry {
+  name: string;
+  kind: "file" | "dir" | "other";
+  size: number;
+  /** Seconds since the epoch. */
+  mtime: number;
+}
+
+/** A network rule OpenShell proposed after a connection was denied. */
+export interface RuleProposal {
+  /** The chunk id `openshell rule approve` takes. */
+  id: string;
+  status: string;
+  rule: string;
+  endpoints: { host: string; port: number; mode?: string }[];
+  /** The programs that would be allowed to make the connection. */
+  binaries: string[];
+  confidence?: number;
+  rationale: string;
+  hits?: number;
+  firstSeen?: string;
+  lastSeen?: string;
+  /** One of the programs is something many things run as (node, python, curl, …). */
+  shared: boolean;
+}
+
 export type CatalogKind = "agent" | "skill" | "context" | "tool";
 
 /** Something in the catalog on this machine that can be put into a sandbox. */
@@ -211,6 +246,8 @@ export interface SessionInfo {
   agentInfo: { name?: string; version?: string; title?: string | null } | null;
   canLoad: boolean;
   canList: boolean;
+  /** The agent takes images in prompts (ACP promptCapabilities.image). */
+  promptImages?: boolean;
   cwd: string;
   /** From the agent, else the first prompt; null for an empty thread. */
   title: string | null;
@@ -221,6 +258,16 @@ export interface SessionInfo {
   usage?: { used?: number; size?: number; totals?: Usage };
   /** Last seq in the event log, so a tab can tell how much to replay. */
   lastSeq: number;
+}
+
+/** An image sent along with a prompt. */
+export interface PromptImage {
+  /** png, jpeg, gif or webp. */
+  mimeType: string;
+  /** Base64 of what the agent receives, already scaled down by the page. */
+  data: string;
+  /** Base64 of a small JPEG, kept in the conversation to show what was sent. */
+  thumb: string;
 }
 
 export interface PastSession {
@@ -247,7 +294,7 @@ interface Logged {
 
 export type SessionEvent =
   | (Logged & { type: "event"; update: SessionUpdate })
-  | (Logged & { type: "user_message"; text: string })
+  | (Logged & { type: "user_message"; text: string; images?: { mimeType: string; thumb: string }[] })
   | (Logged & { type: "turn_start" })
   | (Logged & { type: "turn_end"; stopReason: string; usage?: Usage })
   | (Logged & {
@@ -263,6 +310,8 @@ export type SessionEvent =
       label: string;
     })
   | (Logged & { type: "notice"; text: string })
+  /** Something started listening on a port in the sandbox while the agent worked, e.g. the HyperFrames Studio. */
+  | (Logged & { type: "port_open"; port: number; command?: string; label?: string })
   /** Something failed in this session; shown inline in the conversation. */
   | (Logged & { type: "session_error"; message: string; detail?: string; hint?: string })
   | (Logged & { type: "session_closed"; exitCode: number | null; stderrTail: string[]; hint?: string });
@@ -273,6 +322,10 @@ export type ClientMessage =
   | { type: "list_sandboxes" }
   /** From a sandbox type (its image, policy and agent), or else from the agent's image in agents.json. */
   | { type: "create_sandbox"; reqId: string; name: string; agent?: AgentId; sandboxType?: string; workdir: string }
+  /** The contents of a folder in the sandbox (under /sandbox). */
+  | { type: "files"; reqId: string; sandbox: string; path: string }
+  /** The network rules OpenShell proposes for a sandbox; approve or reject one by its id. */
+  | { type: "rules"; reqId: string; sandbox: string; op?: "approve" | "reject"; chunkId?: string }
   /** Port forwards of a sandbox, what listens in it, and the presets for it. */
   | { type: "ports"; reqId: string; sandbox: string }
   /** Start or stop forwarding a port (the same number on both sides). */
@@ -302,7 +355,7 @@ export type ClientMessage =
   /** Every thread of a sandbox, live or saved. */
   | { type: "delete_threads"; reqId: string; sandbox: string }
   | { type: "list_past_sessions"; reqId: string; sessionId: string }
-  | { type: "prompt"; sessionId: string; text: string }
+  | { type: "prompt"; sessionId: string; text: string; images?: PromptImage[] }
   | { type: "cancel"; sessionId: string }
   | { type: "set_option"; reqId: string; sessionId: string; configId: string; value: string }
   | { type: "permission_answer"; sessionId: string; requestId: string; optionId: string | null }
@@ -345,7 +398,10 @@ export type ServerMessage =
       createNote?: string;
       /** Editors whose command line was found, for "Open in …". */
       editors: EditorInfo[];
+      build: ServerBuild;
     }
+  /** The bridge's code on disk changed (or was reverted) since it started. */
+  | { type: "server_build"; build: ServerBuild }
   | { type: "sandboxes"; sandboxes: SandboxRow[]; error?: string }
   | {
       type: "sandbox_types";
@@ -367,6 +423,8 @@ export type ServerMessage =
       /** Couldn't look into the sandbox. */
       error?: string;
     }
+  | { type: "rules"; reqId: string; sandbox: string; rules: RuleProposal[]; log: string[]; error?: string }
+  | { type: "files"; reqId: string; sandbox: string; path: string; entries: FileEntry[]; truncated: boolean }
   /** Progress of an image build, to every tab. */
   | { type: "image_build"; build: ImageBuild }
   | { type: "gateway"; gateway: GatewayStatus }

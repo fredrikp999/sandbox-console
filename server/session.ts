@@ -16,7 +16,7 @@ import type {
   SetSessionConfigOptionResponse,
   Usage,
 } from "@agentclientprotocol/sdk";
-import type { ActivityState, PastSession, ServerMessage, SessionEvent, SessionInfo } from "../shared/protocol.ts";
+import type { ActivityState, PastSession, PromptImage, ServerMessage, SessionEvent, SessionInfo } from "../shared/protocol.ts";
 import type { AgentConfig } from "./config.ts";
 import { bound } from "./eventlog.ts";
 import { exitHint, rpcHint } from "./hints.ts";
@@ -33,6 +33,8 @@ const TITLE_LENGTH = 80;
 
 /** Distributive Omit, so it keeps each member of the SessionEvent union. */
 type DistOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+const isDone = (u: unknown) => ["completed", "failed"].includes((u as { status?: string }).status ?? "");
+
 type NewEvent = DistOmit<SessionEvent, "sessionId" | "seq" | "ts">;
 
 interface PendingPermission {
@@ -47,6 +49,8 @@ export interface SessionHost {
   changed(): void;
   /** This thread changed; save it to disk soon. */
   persist(thread: Thread): void;
+  /** The agent did something that may have started a server (a tool call ended, a turn ended), or its process just started ("start"). */
+  activity(thread: Thread, why: "start" | "work"): void;
   /** A saved thread of this id from before the agent process started, if there is one. */
   archived(sandbox: string, sessionId: string): StoredThread | undefined;
 }
@@ -109,6 +113,7 @@ export class Thread {
       agentCmd: this.proc.agent.cmd,
       agentInfo: this.proc.agentInfo,
       canLoad: this.proc.canLoad,
+      promptImages: this.proc.promptImages,
       canList: this.proc.canList,
       cwd: this.cwd,
       title: this.title,
@@ -145,17 +150,20 @@ export class Thread {
 
   // ---- what the browser asks for
 
-  prompt(text: string) {
+  prompt(text: string, images: PromptImage[] = []) {
     if (this.proc.dead) throw new Error("The agent process has exited. Start a new session.");
     if (this.turn) throw new Error("The agent is still working on the last prompt in this thread. Wait, or stop it with Esc.");
     const sessionId = this.sessionId;
-    this.title ||= text.trim().split("\n")[0].slice(0, TITLE_LENGTH) || null;
-    this.record({ type: "user_message", text });
+    if (images.length && !this.proc.promptImages) throw new Error(`${this.proc.agent.label} doesn't take images in prompts.`);
+    if (!text.trim() && !images.length) throw new Error("Write something, or attach an image.");
+    this.title ||= text.trim().split("\n")[0].slice(0, TITLE_LENGTH) || (images.length ? "(image)" : null);
+    this.record({ type: "user_message", text, ...(images.length ? { images: images.map(({ mimeType, thumb }) => ({ mimeType, thumb })) } : {}) });
     this.record({ type: "turn_start" });
     this.setState("working");
     this.turn = (async () => {
       try {
-        const r = await this.proc.peer.request<PromptResponse>("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+        const prompt = [...(text.trim() ? [{ type: "text", text }] : []), ...images.map(({ mimeType, data }) => ({ type: "image", mimeType, data }))];
+        const r = await this.proc.peer.request<PromptResponse>("session/prompt", { sessionId, prompt });
         const usage: Usage | undefined = r.usage ?? undefined;
         if (usage) this.usage = { ...this.usage, totals: usage };
         this.record({ type: "turn_end", stopReason: r?.stopReason ?? "end_turn", usage });
@@ -277,6 +285,14 @@ export class Thread {
     this.lastActivity = full.ts;
     this.proc.host.publish(this, full);
     this.proc.host.persist(this);
+    if (full.type === "turn_end" || (full.type === "event" && full.update.sessionUpdate === "tool_call_update" && isDone(full.update))) {
+      this.proc.host.activity(this, "work");
+    }
+  }
+
+  /** Tell this thread's conversation that something is now served in the sandbox. */
+  announcePort(port: number, command?: string, label?: string) {
+    this.record({ type: "port_open", port, command, label });
   }
 
   setState(s: ActivityState) {
@@ -296,6 +312,7 @@ export class Session {
   agentInfo: SessionInfo["agentInfo"] = null;
   canLoad = false;
   canList = false;
+  promptImages = false;
   exitCode: number | null = null;
   readonly threads = new Map<string, Thread>();
   dead = false;
@@ -337,8 +354,12 @@ export class Session {
       this.agentInfo = init.agentInfo ?? null;
       const caps = init.agentCapabilities ?? {};
       this.canLoad = !!caps.loadSession;
+      this.promptImages = !!caps.promptCapabilities?.image;
       this.canList = !!(caps as { sessionCapabilities?: { list?: unknown } }).sessionCapabilities?.list;
-      return await this.newThread(loadSessionId);
+      const first = await this.newThread(loadSessionId);
+      // What already listens in the sandbox isn't news; what starts from here on is.
+      this.host.activity(first, "start");
+      return first;
     } catch (e) {
       this.kill();
       throw await this.describeFailure(e);

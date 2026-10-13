@@ -4,7 +4,7 @@ import type { PermissionOption } from "@agentclientprotocol/sdk";
 import { memo, useState } from "react";
 import { type Conversation, type Item, type PermissionItem, permissionSubject, type ToolItem } from "../conversation.ts";
 import { duration } from "../format.ts";
-import { store } from "../store.ts";
+import { type RequestError, store, useStore } from "../store.ts";
 import { DiffView } from "./DiffView.tsx";
 import { Markdown } from "./Markdown.tsx";
 
@@ -168,6 +168,52 @@ const PermissionCard = memo(function PermissionCard({ p, conv, sessionId }: { p:
   );
 });
 
+/** Something started serving in the sandbox: offer to forward it, then link to it. */
+function PortCard({ item, sessionId }: { item: Extract<Item, { kind: "port" }>; sessionId: string }) {
+  const sandbox = useStore((s) => s.sessions[sessionId]?.info.sandbox);
+  const dead = useStore((s) => s.sessions[sessionId]?.info.state === "dead");
+  const [state, setState] = useState<"idle" | "busy" | "done">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const url = `http://127.0.0.1:${item.port}/`;
+  const forward = async () => {
+    if (!sandbox) return;
+    setState("busy");
+    setError(null);
+    try {
+      await store.request({ type: "forward", sandbox, op: "start", port: item.port });
+      setState("done");
+    } catch (e) {
+      const err = e as RequestError;
+      setError([err.message, err.hint].filter(Boolean).join(" "));
+      setState("idle");
+    }
+  };
+  return (
+    <div className="port-card">
+      <span className="port-card-text">
+        <b>{item.label ?? "A server"}</b> started on port <span className="mono">{item.port}</span> in the sandbox
+        {item.command && !item.label ? <span className="muted"> ({item.command})</span> : null}.
+      </span>
+      {state === "done" ? (
+        <a className="btn small primary" href={url} target="_blank" rel="noreferrer noopener">
+          Open {url.replace("http://", "").replace(/\/$/, "")} ↗
+        </a>
+      ) : (
+        <button
+          type="button"
+          className="btn small"
+          onClick={forward}
+          disabled={state === "busy" || dead || !sandbox}
+          title={`Forward port ${item.port} to this machine`}
+        >
+          {state === "busy" ? "Forwarding…" : "Forward port"}
+        </button>
+      )}
+      {error && <span className="no port-card-error">{error}</span>}
+    </div>
+  );
+}
+
 const STOP_TEXT: Record<string, string> = {
   cancelled: "Stopped",
   refusal: "The agent refused this request",
@@ -180,7 +226,20 @@ const STOP_TEXT: Record<string, string> = {
 function ItemView({ item, conv, sessionId }: { item: Item; conv: Conversation; sessionId: string }) {
   switch (item.kind) {
     case "user":
-      return <div className="msg-user">{item.text}</div>;
+      return (
+        <div className="msg-user">
+          {item.images && (
+            <div className="msg-images">
+              {item.images.map((im, i) => (
+                // The same picture can be sent twice; position is the identity.
+                // biome-ignore lint/suspicious/noArrayIndexKey: see above
+                <img key={i} src={`data:image/jpeg;base64,${im.thumb}`} alt={`Attachment ${i + 1}`} />
+              ))}
+            </div>
+          )}
+          {item.text}
+        </div>
+      );
     case "agent":
       return (
         <div className="msg-agent">
@@ -216,6 +275,8 @@ function ItemView({ item, conv, sessionId }: { item: Item; conv: Conversation; s
       return <PermissionCard p={item} conv={conv} sessionId={sessionId} />;
     case "notice":
       return <div className="line-note">{item.text}</div>;
+    case "port":
+      return <PortCard item={item} sessionId={sessionId} />;
     case "turn_end":
       return (
         <div className="line-note">
@@ -231,15 +292,27 @@ function ItemView({ item, conv, sessionId }: { item: Item; conv: Conversation; s
           {item.detail && <pre>{item.detail}</pre>}
         </div>
       );
-    case "closed":
-      if (item.exitCode === 0 && !item.hint) return <div className="line-note">Session closed.</div>;
+    case "closed": {
+      // Agents stop all the time (you stop one, the gateway restarts, a thread is resumed). That's a quiet
+      // line, with the output a click away; only a failure the console can explain stands out.
+      if (!item.hint) {
+        const label = item.exitCode === 0 || item.exitCode === null ? "The agent stopped." : `The agent stopped (exit code ${item.exitCode}).`;
+        if (!item.stderrTail.length) return <div className="line-note">{label}</div>;
+        return (
+          <details className="line-note closed-note">
+            <summary>{label}</summary>
+            <pre>{item.stderrTail.join("\n")}</pre>
+          </details>
+        );
+      }
       return (
         <div className="err" role="alert">
           <b>The agent process exited{item.exitCode !== null ? ` (exit code ${item.exitCode})` : ""}.</b>
-          {item.hint && <div className="hint">{item.hint}</div>}
+          <div className="hint">{item.hint}</div>
           {item.stderrTail.length > 0 && <pre>{item.stderrTail.join("\n")}</pre>}
         </div>
       );
+    }
   }
 }
 

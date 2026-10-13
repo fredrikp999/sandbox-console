@@ -2,12 +2,14 @@
 // but nothing it sends goes to the CLI or an agent without being checked here.
 import type { ClientMessage } from "../shared/protocol.ts";
 
-type Field = "s" | "s?" | "n" | "s|null";
+type Field = "s" | "s?" | "n" | "s|null" | "images?";
 
 const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   list_sandboxes: {},
   create_sandbox: { reqId: "s", name: "s", agent: "s?", sandboxType: "s?", workdir: "s" },
   sandbox_types: { reqId: "s" },
+  files: { reqId: "s", sandbox: "s", path: "s" },
+  rules: { reqId: "s", sandbox: "s", op: "s?", chunkId: "s?" },
   ports: { reqId: "s", sandbox: "s" },
   forward: { reqId: "s", sandbox: "s", op: "s", port: "n" },
   build_image: { reqId: "s", sandboxType: "s" },
@@ -19,7 +21,7 @@ const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   delete_thread: { reqId: "s", sessionId: "s" },
   delete_threads: { reqId: "s", sandbox: "s" },
   list_past_sessions: { reqId: "s", sessionId: "s" },
-  prompt: { sessionId: "s", text: "s" },
+  prompt: { sessionId: "s", text: "s", images: "images?" },
   cancel: { sessionId: "s" },
   set_option: { reqId: "s", sessionId: "s", configId: "s", value: "s" },
   permission_answer: { sessionId: "s", requestId: "s", optionId: "s|null" },
@@ -32,6 +34,31 @@ const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
 };
 
 const MAX_STRING = 200_000; // prompts can be long; everything else is short
+/** Images in a prompt: a few, each scaled down by the page. */
+export const MAX_IMAGES = 4;
+const MAX_IMAGE_BASE64 = 6_000_000;
+const MAX_THUMB_BASE64 = 120_000;
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+function imagesOk(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (!Array.isArray(v) || v.length > MAX_IMAGES) return false;
+  return v.every((i) => {
+    const o = (i && typeof i === "object" ? i : {}) as Record<string, unknown>;
+    return (
+      typeof o.mimeType === "string" &&
+      IMAGE_TYPES.has(o.mimeType) &&
+      typeof o.data === "string" &&
+      o.data.length > 0 &&
+      o.data.length <= MAX_IMAGE_BASE64 &&
+      BASE64.test(o.data) &&
+      typeof o.thumb === "string" &&
+      o.thumb.length <= MAX_THUMB_BASE64 &&
+      BASE64.test(o.thumb)
+    );
+  });
+}
 
 function ok(v: unknown, f: Field): boolean {
   switch (f) {
@@ -43,6 +70,8 @@ function ok(v: unknown, f: Field): boolean {
       return v === null || (typeof v === "string" && v.length <= MAX_STRING);
     case "n":
       return typeof v === "number" && Number.isFinite(v);
+    case "images?":
+      return imagesOk(v);
   }
 }
 
@@ -63,7 +92,12 @@ export function parseClientMessage(raw: string): ClientMessage {
     if (!ok(m[k], f)) {
       throw Object.assign(new Error(`Bad message from the browser: ${type}.${k}`), { reqId: typeof m.reqId === "string" ? m.reqId : undefined });
     }
-    if (m[k] !== undefined && m[k] !== null) out[k] = m[k];
+    if (f === "images?") {
+      // Rebuilt from the known fields, so nothing else rides along.
+      if (Array.isArray(m[k]) && (m[k] as unknown[]).length) {
+        out[k] = (m[k] as { mimeType: string; data: string; thumb: string }[]).map(({ mimeType, data, thumb }) => ({ mimeType, data, thumb }));
+      }
+    } else if (m[k] !== undefined && m[k] !== null) out[k] = m[k];
     else if (f === "s|null") out[k] = null;
   }
   return out as ClientMessage;

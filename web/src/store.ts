@@ -8,6 +8,7 @@ import type {
   GatewayStatus,
   ImageBuild,
   SandboxRow,
+  ServerBuild,
   ServerMessage,
   SessionInfo,
 } from "../../shared/protocol.ts";
@@ -29,6 +30,8 @@ export interface State {
   link: Link;
   agents: AgentInfo[];
   editors: EditorInfo[];
+  /** What the bridge says about its own code; null until it has said it. */
+  server: ServerBuild | null;
   /** The image build running or last run, from any tab. */
   build: ImageBuild | null;
   createNote?: string;
@@ -76,6 +79,7 @@ class Store {
     agents: [],
     editors: [],
     build: null,
+    server: null,
     sandboxes: [],
     gateway: null,
     sessions: {},
@@ -254,7 +258,7 @@ class Store {
   private reduce(s: State, m: ServerMessage): State {
     switch (m.type) {
       case "hello": {
-        let next: State = { ...s, agents: m.agents, editors: m.editors ?? [], createNote: m.createNote };
+        let next: State = { ...s, agents: m.agents, editors: m.editors ?? [], server: m.build ?? null, createNote: m.createNote };
         const live = new Set(m.sessions.map((x) => x.sessionId));
         // Forget sessions the bridge no longer has (e.g. it restarted).
         const sessions = Object.fromEntries(Object.entries(next.sessions).filter(([id]) => live.has(id)));
@@ -275,6 +279,8 @@ class Store {
         return { ...s, gateway: m.gateway };
       case "image_build":
         return { ...s, build: m.build };
+      case "server_build":
+        return { ...s, server: m.build };
       case "session_opened": {
         // Every tab hears about a new thread; only the one that asked switches to it.
         const mine = !!m.reqId && this.pending.has(m.reqId);
@@ -306,6 +312,8 @@ class Store {
       case "catalog":
       case "sandbox_types":
       case "ports":
+      case "rules":
+      case "files":
         this.settle(m);
         if (m.type === "error" && !m.reqId) {
           const id = m.sessionId;

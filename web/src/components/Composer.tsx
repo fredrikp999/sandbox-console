@@ -1,8 +1,11 @@
 // Message box with the slash menu. Enter sends, Shift+Enter adds a line, Esc
 // stops the agent. Agent commands are sent as prompts; console commands run here.
+// Images can be pasted, dropped or attached, if the agent takes them.
 
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { PromptImage } from "../../../shared/protocol.ts";
+import { type Attached, imageFiles, MAX_IMAGES, prepareImage } from "../images.ts";
 
 export interface ConsoleCommand {
   name: string;
@@ -22,6 +25,8 @@ export function Composer({
   consoleCommands,
   working,
   disabled,
+  canImages,
+  controls,
   onSend,
   onStop,
 }: {
@@ -30,7 +35,11 @@ export function Composer({
   consoleCommands: ConsoleCommand[];
   working: boolean;
   disabled?: string;
-  onSend: (text: string) => boolean;
+  /** The agent takes images in prompts. */
+  canImages: boolean;
+  /** Model and mode for this thread, shown under the message box. */
+  controls?: React.ReactNode;
+  onSend: (text: string, images: PromptImage[]) => boolean;
   onStop: () => void;
 }) {
   const drafts = useRef(new Map<string, string>());
@@ -39,6 +48,17 @@ export function Composer({
     setTextState(v);
     drafts.current.set(sessionKey, v);
   };
+  const draftImages = useRef(new Map<string, Attached[]>());
+  const [attached, setAttachedState] = useState<Attached[]>(() => draftImages.current.get(sessionKey) ?? []);
+  const setAttached = (v: Attached[] | ((a: Attached[]) => Attached[])) =>
+    setAttachedState((prev) => {
+      const next = typeof v === "function" ? v(prev) : v;
+      draftImages.current.set(sessionKey, next);
+      return next;
+    });
+  const [preparing, setPreparing] = useState(0);
+  const [over, setOver] = useState(false);
+  const attach = useRef<HTMLInputElement>(null);
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -47,6 +67,7 @@ export function Composer({
   // A draft per session, so switching sandboxes doesn't lose what you typed.
   useEffect(() => {
     setTextState(drafts.current.get(sessionKey) ?? "");
+    setAttachedState(draftImages.current.get(sessionKey) ?? []);
     setNotice(null);
     box.current?.focus();
   }, [sessionKey]);
@@ -78,10 +99,32 @@ export function Composer({
     box.current?.focus();
   };
 
+  /** Read, scale and add images; what can't be added is said in the notice. */
+  const addFiles = async (list: File[]) => {
+    const files = imageFiles(list);
+    if (!files.length) return;
+    if (!canImages) return setNotice("This agent doesn't take images in prompts.");
+    const room = MAX_IMAGES - attached.length;
+    if (room <= 0) return setNotice(`At most ${MAX_IMAGES} images in one message.`);
+    const notes: string[] = [];
+    if (files.length > room) notes.push(`Only ${MAX_IMAGES} images fit in one message; the rest were left out.`);
+    setPreparing((n) => n + 1);
+    try {
+      const done = await Promise.allSettled(files.slice(0, room).map(prepareImage));
+      const ok = done.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      for (const r of done) if (r.status === "rejected") notes.push((r.reason as Error).message);
+      if (ok.length) setAttached((a) => [...a, ...ok].slice(0, MAX_IMAGES));
+    } finally {
+      setPreparing((n) => n - 1);
+    }
+    setNotice(notes.length ? notes.join(" ") : null);
+    box.current?.focus();
+  };
+
   const submit = () => {
     const v = text.trim();
-    if (!v || disabled) return;
-    if (v.startsWith("/") && !text.startsWith(" ")) {
+    if ((!v && !attached.length) || disabled || preparing) return;
+    if (!attached.length && v.startsWith("/") && !text.startsWith(" ")) {
       const [word, ...rest] = v.split(/\s+/);
       const arg = rest.join(" ");
       const cc = consoleCommands.find((c) => `/${c.name}` === word);
@@ -97,8 +140,14 @@ export function Composer({
         return;
       }
     }
-    if (onSend(v)) {
+    if (
+      onSend(
+        v,
+        attached.map((a) => a.image),
+      )
+    ) {
       setText("");
+      setAttached([]);
       setNotice(null);
     }
   };
@@ -133,7 +182,24 @@ export function Composer({
   };
 
   return (
-    <div className="composer">
+    // Dropping image files on the message box attaches them.
+    // biome-ignore lint/a11y/noStaticElementInteractions: dropping is a shortcut; the attach button and pasting work from the keyboard
+    <div
+      className={`composer${over ? " over" : ""}`}
+      onDragOver={(e) => {
+        if (canImages && e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setOver(true);
+        }
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        setOver(false);
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        addFiles([...e.dataTransfer.files]);
+      }}
+    >
       {menuOpen && (
         <div className="slash" role="listbox" aria-label="Commands">
           {hits.map((h, i) => {
@@ -157,7 +223,54 @@ export function Composer({
           })}
         </div>
       )}
+      {(attached.length > 0 || preparing > 0) && (
+        <div className="attached">
+          {attached.map((a) => (
+            <div key={a.id} className="attached-one">
+              <img src={a.preview} alt={a.name} title={a.name} />
+              <button
+                type="button"
+                className="attached-x"
+                onClick={() => setAttached((l) => l.filter((x) => x.id !== a.id))}
+                aria-label={`Remove ${a.name}`}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {preparing > 0 && <div className="attached-one busy">…</div>}
+        </div>
+      )}
       <div className="comp-row">
+        {canImages && (
+          <>
+            <button
+              type="button"
+              className="icon-btn attach"
+              onClick={() => attach.current?.click()}
+              disabled={!!disabled || attached.length >= MAX_IMAGES}
+              title={`Attach an image (or paste or drop one), up to ${MAX_IMAGES}`}
+              aria-label="Attach an image"
+            >
+              <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" />
+                <circle cx="5.5" cy="6" r="1.2" fill="currentColor" />
+                <path d="M2.5 12.5l3.5-4 2.5 2.5 2-2 3 3.5" fill="none" stroke="currentColor" />
+              </svg>
+            </button>
+            <input
+              ref={attach}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                addFiles([...(e.target.files ?? [])]);
+                e.target.value = "";
+              }}
+            />
+          </>
+        )}
         <textarea
           ref={box}
           rows={1}
@@ -171,37 +284,46 @@ export function Composer({
             setActive(0);
           }}
           onKeyDown={onKey}
+          onPaste={(e) => {
+            const pasted = imageFiles(e.clipboardData.files);
+            if (!pasted.length) return;
+            e.preventDefault();
+            addFiles(pasted);
+          }}
         />
         {working ? (
           <button type="button" className="btn stop" onClick={onStop} title="Stop the agent (Esc)">
             Stop
           </button>
         ) : (
-          <button type="button" className="btn primary" onClick={submit} disabled={!!disabled || !text.trim()}>
+          <button type="button" className="btn primary" onClick={submit} disabled={!!disabled || preparing > 0 || (!text.trim() && !attached.length)}>
             Send
           </button>
         )}
       </div>
-      {notice ? (
-        <div className="hint alert" role="status">
-          {notice}
-        </div>
-      ) : (
-        <div className="hint">
-          <span>
-            <kbd>Enter</kbd> send
-          </span>
-          <span>
-            <kbd>Shift</kbd>+<kbd>Enter</kbd> new line
-          </span>
-          <span>
-            <kbd>Esc</kbd> stop the agent
-          </span>
-          <span>
-            <kbd>/</kbd> commands
-          </span>
-        </div>
-      )}
+      <div className="comp-foot">
+        {controls}
+        {notice ? (
+          <div className="hint alert" role="status">
+            {notice}
+          </div>
+        ) : (
+          <div className="hint">
+            <span>
+              <kbd>Enter</kbd> send
+            </span>
+            <span>
+              <kbd>Shift</kbd>+<kbd>Enter</kbd> new line
+            </span>
+            <span>
+              <kbd>Esc</kbd> stop the agent
+            </span>
+            <span>
+              <kbd>/</kbd> commands
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

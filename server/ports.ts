@@ -141,8 +141,15 @@ async function hostUser(port: number): Promise<string | null> {
   return who || "another program";
 }
 
+/** Ports from here up are handed out for throwaway servers and connections; not what you'd open. */
+export const EPHEMERAL_FROM = 32768;
+
 export async function start(sandbox: string, port: number, log: string[]) {
   if (!validPort(port)) throw new CliError("Choose a port from 1024 to 65535.", "");
+  if ((await list().catch(() => [])).some((f) => f.sandbox === sandbox && f.port === port && f.alive)) {
+    log.push(`Port ${port} is already forwarded: http://127.0.0.1:${port}/`);
+    return;
+  }
   const taken = await hostUser(port);
   if (taken) {
     throw new CliError(

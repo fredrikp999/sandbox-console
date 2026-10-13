@@ -1,0 +1,17 @@
+#!/bin/sh
+# GNU `stat -c FORMAT` on macOS (BSD stat takes -f), for the few formats the console's
+# sandbox scripts use: %F type, %s size, %Y mtime, %n name. The fake openshell puts this
+# directory first on PATH on macOS only, where the "sandbox" is this machine.
+L=
+fmt=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -L) L=-L ;;
+    -c) fmt=$2; shift ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+  shift
+done
+fmt=$(printf '%s' "$fmt" | sed -e 's/%F/%HT/g' -e 's/%s/%z/g' -e 's/%Y/%m/g' -e 's/%n/%N/g')
+exec /usr/bin/stat $L -f "$fmt" -- "$@"

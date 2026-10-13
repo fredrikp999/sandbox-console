@@ -15,15 +15,19 @@ import type {
   RepoReview,
   SandboxCatalog,
   SandboxRow,
+  ServerBuild,
   ServerMessage,
 } from "../shared/protocol.ts";
+import { codeHash, protocolHash } from "./build.ts";
 import * as catalog from "./catalog.ts";
 import { type AgentConfig, agentInfo, findConfigs, findPolicy, loadAgents, StateStore } from "./config.ts";
 import * as editor from "./editor.ts";
+import * as files from "./files.ts";
 import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
 import * as ports from "./ports.ts";
 import * as repos from "./repos.ts";
+import * as rules from "./rules.ts";
 import { Session, type SessionHost, type Thread } from "./session.ts";
 import { type StoredThread, ThreadStore } from "./threadstore.ts";
 import * as types from "./types.ts";
@@ -35,6 +39,10 @@ const STATUS_EVERY = 10_000;
 const DETECT_TTL = 60_000;
 /** Network results are shared by all tabs for this long. */
 const NETWORK_TTL = 10_000;
+/** How often the code on disk is compared with the code running. Not in --dev, where tsx restarts the bridge itself. */
+const BUILD_EVERY = Number(process.env.CONSOLE_BUILD_CHECK_MS) || 10_000;
+/** How long after a tool call or turn ends the sandbox's ports are looked at. */
+const PORT_LOOK_DELAY = Number(process.env.CONSOLE_PORT_LOOK_MS) || 1_500;
 const REPO_OPS: RepoOp[] = ["link", "send", "get", "review", "merge", "push", "unlink"];
 
 interface Tab {
@@ -64,8 +72,17 @@ export class Bridge implements SessionHost {
   private network = new Map<string, { at: number; since: number; result: Promise<NetworkHost[]> }>(); // by sandbox
   private gateway: GatewayStatus = { name: "openshell", status: "unknown" };
   private timers: NodeJS.Timeout[] = [];
+  /** Where the code is read from, to tell when it changed (tests point this elsewhere). */
+  private watch = process.env.CONSOLE_WATCH ? process.env.CONSOLE_WATCH.split(":") : undefined;
+  private codeAtStart = codeHash(this.watch);
+  private serverBuild: ServerBuild = { protocol: protocolHash(), stale: false };
   /** Sandboxes with a repository action running: one at a time each. */
   private repoBusy = new Set<string>();
+  /** Per sandbox: the ports seen listening at the last look, and a look that's been asked for. */
+  private portWatch = new Map<
+    string,
+    { known: Set<number> | null; thread: Thread; announce: boolean; timer?: NodeJS.Timeout; busy: boolean; again: boolean }
+  >();
 
   constructor() {
     for (const t of this.threadStore.loadAll()) {
@@ -80,6 +97,14 @@ export class Bridge implements SessionHost {
     list();
     status();
     this.timers.push(setInterval(list, LIST_EVERY), setInterval(status, STATUS_EVERY));
+    if (!process.argv.includes("--dev")) this.timers.push(setInterval(() => this.checkBuild(), BUILD_EVERY));
+  }
+
+  private checkBuild() {
+    const stale = codeHash(this.watch) !== this.codeAtStart;
+    if (stale === this.serverBuild.stale) return;
+    this.serverBuild = { ...this.serverBuild, stale };
+    this.broadcast({ type: "server_build", build: this.serverBuild });
   }
 
   stop() {
@@ -121,6 +146,7 @@ export class Bridge implements SessionHost {
       ],
       canCreate: true,
       editors: this.editors,
+      build: this.serverBuild,
       createNote: this.policy ? undefined : "No policies/vscode-terminal.yaml found (set OPENSHELL_CONFIGS); new sandboxes get the default policy.",
     });
     this.send(tab, { type: "gateway", gateway: this.gateway });
@@ -153,6 +179,58 @@ export class Bridge implements SessionHost {
 
   persist(thread: Thread) {
     this.threadStore.schedule({ sandbox: thread.sandbox, sessionId: thread.sessionId, read: () => thread.diskSnapshot() });
+  }
+
+  /**
+   * After a tool call or a turn ends, look at what listens in the sandbox a moment
+   * later (a server takes a second to start), and tell the thread about new ports
+   * so it can offer to forward them. The look at the start only learns what's there.
+   */
+  activity(thread: Thread, why: "start" | "work") {
+    if (thread.state === "dead") return;
+    const sandbox = thread.sandbox;
+    let w = this.portWatch.get(sandbox);
+    if (!w) {
+      w = { known: null, thread, announce: false, busy: false, again: false };
+      this.portWatch.set(sandbox, w);
+    }
+    w.thread = thread;
+    w.announce ||= why === "work";
+    clearTimeout(w.timer);
+    w.timer = setTimeout(() => void this.lookForPorts(sandbox), why === "start" ? 0 : PORT_LOOK_DELAY);
+  }
+
+  private async lookForPorts(sandbox: string) {
+    const w = this.portWatch.get(sandbox);
+    if (!w) return;
+    if (w.busy) {
+      w.again = true;
+      return;
+    }
+    w.busy = true;
+    const announce = w.announce;
+    w.announce = false;
+    try {
+      const listening = await ports.listening(sandbox, this.portPresets);
+      const forwarded = new Set((await ports.list().catch(() => [])).filter((f) => f.sandbox === sandbox).map((f) => f.port));
+      const before = w.known;
+      w.known = new Set(listening.map((l) => l.port));
+      if (announce) {
+        for (const l of listening) {
+          if (l.port >= ports.EPHEMERAL_FROM || before?.has(l.port) || forwarded.has(l.port)) continue;
+          const preset = this.portPresets.find((p) => p.port === l.port);
+          if (w.thread.state !== "dead") w.thread.announcePort(l.port, l.command, preset?.label);
+        }
+      }
+    } catch {
+      /* the sandbox may be busy or gone; the next look tries again */
+    } finally {
+      w.busy = false;
+      if (w.again) {
+        w.again = false;
+        w.timer = setTimeout(() => void this.lookForPorts(sandbox), PORT_LOOK_DELAY);
+      }
+    }
   }
 
   archived(sandbox: string, sessionId: string) {
@@ -243,7 +321,7 @@ export class Bridge implements SessionHost {
       }
 
       case "prompt":
-        this.bySessionId(msg.sessionId).prompt(msg.text);
+        this.bySessionId(msg.sessionId).prompt(msg.text, msg.images);
         return;
 
       case "cancel":
@@ -301,6 +379,36 @@ export class Bridge implements SessionHost {
       case "ports":
       case "forward":
         return this.ports(tab, msg);
+
+      case "files": {
+        const sb = this.sandbox(msg.sandbox);
+        if (sb.phase !== "Ready") throw new Error(`Sandbox ${sb.name} is ${sb.phase}, not Ready.`);
+        const path = files.cleanPath(msg.path);
+        this.send(tab, { type: "files", reqId: msg.reqId, sandbox: sb.name, path, ...(await files.list(sb.name, path)) });
+        return;
+      }
+
+      case "rules": {
+        const sb = this.sandbox(msg.sandbox);
+        const log: string[] = [];
+        if (msg.op) {
+          if (msg.op !== "approve" && msg.op !== "reject") throw new Error(`Unknown rule action ${msg.op}`);
+          await (msg.op === "approve" ? rules.approve : rules.reject)(sb.name, msg.chunkId ?? "", log);
+          // The proxy applies the new policy; the next denied list should reflect it.
+          this.network.delete(sb.name);
+        }
+        let list: Awaited<ReturnType<typeof rules.pending>> = [];
+        let error: string | undefined;
+        if (sb.phase === "Ready") {
+          try {
+            list = await rules.pending(sb.name);
+          } catch (e) {
+            error = `${(e as Error).message}${(e as Explained).detail ? `: ${(e as Explained).detail}` : ""}`;
+          }
+        }
+        this.send(tab, { type: "rules", reqId: msg.reqId, sandbox: sb.name, rules: list, log, error });
+        return;
+      }
 
       case "sandbox_types":
         this.send(tab, {
@@ -783,6 +891,13 @@ export class Bridge implements SessionHost {
     this.network.set(s.sandbox, { at: Date.now(), since: s.spawnedAt, result });
     result.catch(() => this.network.delete(s.sandbox));
     return result;
+  }
+
+  /** For the file endpoints in index.ts: a Ready sandbox by name. */
+  readySandbox(name: string): string {
+    const sb = this.sandbox(name);
+    if (sb.phase !== "Ready") throw new Error(`Sandbox ${sb.name} is ${sb.phase}, not Ready.`);
+    return sb.name;
   }
 
   /** For the bundle download: the sandbox and directory of an open session. */

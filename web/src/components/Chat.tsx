@@ -1,6 +1,7 @@
 // Middle column: header with model picker, the conversation log, the composer.
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { PromptImage } from "../../../shared/protocol.ts";
 import { type BundleStatus, downloadBundle } from "../bundle.ts";
 import { agentLabel, tokens } from "../format.ts";
 import { type RequestError, type SessionView, store, useStore } from "../store.ts";
@@ -193,14 +194,14 @@ export function Chat() {
       ? [`Phase: ${sb.phase}`, `Created: ${sb.created}`, sb.type && `Type: ${sb.type}`].filter(Boolean).join("\n")
       : undefined;
 
-  const send = (text: string) => {
+  const send = (text: string, images: PromptImage[] = []) => {
     if (!info) return false;
     if (working) {
       setFlash({ tone: "error", text: "The agent is still working. Wait for it, or stop it with Esc." });
       return false;
     }
     try {
-      store.send({ type: "prompt", sessionId: info.sessionId, text });
+      store.send({ type: "prompt", sessionId: info.sessionId, text, ...(images.length ? { images } : {}) });
       stick.current = true;
       return true;
     } catch (e) {
@@ -221,7 +222,6 @@ export function Chat() {
           <span>{sub}</span>
         </div>
         <div className="head-tools">
-          {view && !dead && <ConfigControls view={view} picker={picker} onError={(text) => setFlash({ tone: "error", text })} />}
           {sb && <SandboxActions sb={sb} sessionId={info?.sessionId} cwd={info?.cwd} alive={!!info && !dead} />}
           <PanelButton side="right" />
         </div>
@@ -271,6 +271,8 @@ export function Chat() {
           consoleCommands={consoleCommands}
           working={working}
           disabled={info?.state === "starting" ? "Starting the agent…" : undefined}
+          canImages={!!info?.promptImages}
+          controls={<ConfigControls view={view} picker={picker} onError={(text) => setFlash({ tone: "error", text })} />}
           onSend={send}
           onStop={stop}
         />

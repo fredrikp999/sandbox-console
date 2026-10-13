@@ -40,7 +40,15 @@ const inBox = (p) => p.replace(/\/sandbox(?![\w.-])/g, ROOT);
 if (ROOT && a === "sandbox" && b === "exec" && args.includes("sh")) {
   const { spawnSync } = await import("node:child_process");
   const [script, ...rest] = args.slice(args.indexOf("--") + 3);
-  const r = spawnSync("sh", ["-c", inBox(script), ...rest.map(inBox)], { stdio: "inherit" });
+  // There is no /proc/net/tcp to read on macOS, and listening ports are scripted anyway (FAKE_LISTEN, see below).
+  if (script.includes("/proc/net/tcp") && process.env.FAKE_LISTEN) {
+    const fs = await import("node:fs");
+    if (fs.existsSync(process.env.FAKE_LISTEN)) process.stdout.write(fs.readFileSync(process.env.FAKE_LISTEN, "utf8"));
+    process.exit(0);
+  }
+  // macOS has no GNU stat; test/fixtures/bin/stat stands in for it (see there).
+  const PATH = process.platform === "darwin" ? `${new URL("./bin", import.meta.url).pathname}:${process.env.PATH}` : process.env.PATH;
+  const r = spawnSync("sh", ["-c", inBox(script), ...rest.map(inBox)], { stdio: "inherit", env: { ...process.env, PATH } });
   process.exit(r.status ?? 1);
 } else if (ROOT && a === "sandbox" && (b === "upload" || b === "download")) {
   const { copyFileSync } = await import("node:fs");
@@ -53,6 +61,30 @@ if (ROOT && a === "sandbox" && b === "exec" && args.includes("sh")) {
   // The bridge test reads back what it was asked to create.
   if (process.env.FAKE_CREATE_LOG) (await import("node:fs")).appendFileSync(process.env.FAKE_CREATE_LOG, `${JSON.stringify(args)}\n`);
   console.log(`Created sandbox ${args[args.indexOf("--name") + 1]}`);
+} else if (a === "rule") {
+  // Proposals are in FAKE_RULES (a JSON file of {id, host, port, binary, hits}); approving or rejecting removes one.
+  const fs = await import("node:fs");
+  const file = process.env.FAKE_RULES;
+  const all = file && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
+  const arg = (k) => args[args.indexOf(k) + 1];
+  if (b === "get") {
+    console.log(`Network Rules:  (version 3, ${all.length} chunks)\n`);
+    for (const r of all) {
+      console.log(`  Chunk: ${r.id}\n  Status: pending\n  Rule: allow_${r.host.replaceAll(".", "_")}_${r.port}\n  Binary: ${r.binary}`);
+      console.log(`  Confidence: 75%\n  Rationale: Allow ${r.binary.split("/").pop()} to connect to ${r.host}:${r.port} (HTTPS).`);
+      console.log(`  Prover: prover: no new findings\n  Candidate: abc\n  Endpoints: ${r.host}:${r.port} [L4]\n  Binaries: ${r.binary}`);
+      if (r.hits) console.log(`  Hits: ${r.hits} (first seen 2026-10-13 05:49:45, last seen 2026-10-13 05:52:19)`);
+      console.log("");
+    }
+  } else if (b === "approve" || b === "reject") {
+    const id = arg("--chunk-id");
+    if (!all.some((r) => r.id === id)) {
+      console.error(`chunk ${id} not found`);
+      process.exit(1);
+    }
+    fs.writeFileSync(file, JSON.stringify(all.filter((r) => r.id !== id)));
+    if (process.env.FAKE_RULES_LOG) fs.appendFileSync(process.env.FAKE_RULES_LOG, `${b} ${id}\n`);
+  }
 } else if (a === "forward") {
   // Forwards are kept in FAKE_FORWARDS (a JSON file), so start, list and stop agree.
   const fs = await import("node:fs");
@@ -94,6 +126,12 @@ else if (a === "sandbox" && b === "get") {
     // bundle.ts: `sh -c <script> sh <repo> <out>`. /sandbox/repo is a repo with two
     // commits on a branch whose name isn't Latin-1; anything else isn't a repo.
     const [script, , repo] = cmd.slice(2);
+    if (script.includes("/proc/net/tcp")) {
+      // ports.ts: what listens in the sandbox, as "L <hex port>" and "C <command line>" lines (FAKE_LISTEN is a file of them).
+      const file = process.env.FAKE_LISTEN;
+      if (file && (await import("node:fs")).existsSync(file)) process.stdout.write((await import("node:fs")).readFileSync(file, "utf8"));
+      process.exit(0);
+    }
     if (script.includes("git bundle create") && repo === "/sandbox/repo") {
       console.log("agent/ünï 2 host/main");
       process.exit(0);
@@ -146,8 +184,18 @@ function agent() {
     },
   ];
 
-  async function turn(id, sessionId, text) {
+  async function turn(id, sessionId, text, images = []) {
     cancelled = false;
+    // Tell the test what arrived: "image/png 12 bytes" per image block.
+    if (images.length) {
+      update(sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: `Got ${images.length} image(s): ${images.map((i) => `${i.mimeType} ${Buffer.from(i.data, "base64").length} bytes`).join(", ")}. `,
+        },
+      });
+    }
     if (/fail/.test(text)) return send({ id, error: { code: -32603, message: "Cannot connect to API: models.opencode.ai" } });
     if (/exit/.test(text)) {
       console.error("fake agent: exiting on request");
@@ -278,7 +326,7 @@ function agent() {
           result: {
             protocolVersion: 1,
             agentInfo: { name: "FakeCode", version: "0.0.1" },
-            agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
+            agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} }, promptCapabilities: { image: true } },
           },
         });
       case "session/new": {
@@ -312,7 +360,15 @@ function agent() {
         models_by_session.set(p.sessionId, p.value);
         return send({ id: m.id, result: { configOptions: config(p.sessionId) } });
       case "session/prompt":
-        return void turn(m.id, p.sessionId, p.prompt.map((c) => c.text).join(""));
+        return void turn(
+          m.id,
+          p.sessionId,
+          p.prompt
+            .filter((c) => c.type === "text")
+            .map((c) => c.text)
+            .join(""),
+          p.prompt.filter((c) => c.type === "image"),
+        );
       case "session/cancel":
         cancelled = true;
         return;
