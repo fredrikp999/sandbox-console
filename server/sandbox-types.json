@@ -30,5 +30,37 @@
     "policy": "vscode-terminal.yaml",
     "build": "opencode-sandbox",
     "description": "OpenCode with models through OpenRouter, with git and a terminal."
+  },
+  "agy": {
+    "label": "Antigravity CLI",
+    "agent": "agy",
+    "image": "agy-sandbox:latest",
+    "policy": "antigravity.yaml",
+    "build": "agy-sandbox",
+    "description": "Antigravity CLI (agy) with git, through the ACP adapter. You sign in with your Google account inside the sandbox on first use."
+  },
+  "agy-node": {
+    "label": "Antigravity CLI + Node",
+    "agent": "agy",
+    "image": "agy-node:latest",
+    "policy": "agy-node.yaml",
+    "build": "agy-node",
+    "description": "Adds Node.js; node may reach registry.npmjs.org so the agent can npm install."
+  },
+  "agy-python": {
+    "label": "Antigravity CLI + Python",
+    "agent": "agy",
+    "image": "agy-python:latest",
+    "policy": "agy-python.yaml",
+    "build": "agy-python",
+    "description": "Adds Python and pip, with read-only access to PyPI."
+  },
+  "agy-hyperframes": {
+    "label": "Antigravity CLI + HyperFrames",
+    "agent": "agy",
+    "image": "agy-hyperframes:latest",
+    "policy": "agy-hyperframes.yaml",
+    "build": "agy-hyperframes",
+    "description": "Videos from HTML with agy: HyperFrames, Python, FFmpeg and Chromium; the CDNs compositions load are allowed."
   }
 }

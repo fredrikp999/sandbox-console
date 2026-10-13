@@ -31,7 +31,7 @@ export interface SandboxRow {
   /** Detected from the provider policy or the name, or remembered; null if unknown. */
   agent: AgentId | null;
   /** How `agent` was found, so the UI can ask when it is only a guess. */
-  agentSource: "policy" | "name" | "remembered" | null;
+  agentSource: "policy" | "probe" | "name" | "remembered" | null;
   /** Error text from the Ready condition, when the sandbox isn't Ready. */
   message?: string;
   /** The sandbox type's label, if the console created it. */

@@ -841,6 +841,11 @@ export class Bridge implements SessionHost {
       } catch {
         /* fall back to the name */
       }
+      const found = await this.probe(s.name);
+      if (found) {
+        this.detected.set(s.id, { agent: found, source: "probe", at });
+        return;
+      }
     }
     for (const a of this.agents.values()) {
       if (s.name === a.id || s.name.startsWith(`${a.id}-`)) {
@@ -849,6 +854,26 @@ export class Bridge implements SessionHost {
       }
     }
     this.detected.set(s.id, { agent: null, source: null, at });
+  }
+
+  /** Which agent's command is installed in the sandbox. Images with two (agy-hyperframes has claude's too) count as agy, as in acp_client.py. */
+  private async probe(sandbox: string): Promise<AgentId | null> {
+    const cmds = [...this.agents.values()];
+    try {
+      const r = await os.execScript(
+        sandbox,
+        'for c in "$@"; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done',
+        cmds.map((a) => a.cmd[0]),
+        15_000,
+      );
+      if (r.code !== 0) return null;
+      const have = new Set(r.stdout.split("\n").map((l) => l.trim()));
+      const found = cmds.filter((a) => have.has(a.cmd[0]));
+      if (found.length === 1) return found[0].id;
+      return found.find((a) => a.id === "agy")?.id ?? null;
+    } catch {
+      return null;
+    }
   }
 
   private rows(): SandboxRow[] {

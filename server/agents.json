@@ -15,5 +15,12 @@
     "provider": "claude",
     "missingHint": "This sandbox's image has no claude-acp-start (the claude-agent-acp ACP adapter). Rebuild it in openshell-configs with `make claude-sandbox` (or `make images` for claude-browser and claude-hyperframes too), then recreate the sandbox.",
     "layout": "claude"
+  },
+  "agy": {
+    "label": "Antigravity CLI",
+    "cmd": ["agy-acp-start"],
+    "image": "agy-sandbox:latest",
+    "missingHint": "This sandbox's image has no agy-acp-start (the google-antigravity-acp adapter around agy). Rebuild it in openshell-configs with `make agy-sandbox`, then recreate the sandbox. If agy asks you to sign in, log in once with `bin/sandbox.sh agy <sandbox>`.",
+    "layout": "claude"
   }
 }

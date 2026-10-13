@@ -82,7 +82,7 @@ export function StartSession({ sb, resume, resumeId }: { sb: SandboxRow; resume?
     }
   };
 
-  const known = sb.agentSource === "policy" || sb.agentSource === "remembered";
+  const known = sb.agentSource === "policy" || sb.agentSource === "probe" || sb.agentSource === "remembered";
   const cmd = agents.find((a) => a.id === agent)?.cmd.join(" ");
   return (
     <div className="empty">
