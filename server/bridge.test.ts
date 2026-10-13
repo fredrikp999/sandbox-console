@@ -1,7 +1,7 @@
 // End-to-end through the real bridge, with test/fixtures/fake-openshell.mjs as the CLI.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,12 @@ const PORT = 7900 + Math.floor(Math.random() * 90);
 const TOKEN = "test-token";
 const BASE = `http://127.0.0.1:${PORT}`;
 let server: ReturnType<typeof spawn>;
+// A stand-in openshell-configs: two of the policies, and a Makefile whose one target "builds" quickly.
+const configs = mkdtempSync(join(tmpdir(), "sc-configs-"));
+mkdirSync(join(configs, "policies"));
+for (const p of ["vscode-terminal.yaml", "browser.yaml"]) writeFileSync(join(configs, "policies", p), "version: 1\n");
+writeFileSync(join(configs, "Makefile"), "claude-browser:\n\t@echo step 1\n\t@echo step 2\n");
+const createLog = join(configs, "created.jsonl");
 
 before(async () => {
   server = spawn(process.execPath, ["--import", "tsx", join(ROOT, "server/index.ts"), "--port", String(PORT)], {
@@ -21,6 +27,10 @@ before(async () => {
       OPENSHELL_BIN: join(ROOT, "test/fixtures/fake-openshell.mjs"),
       CONSOLE_TOKEN: TOKEN,
       CONSOLE_STATE: join(mkdtempSync(join(tmpdir(), "sc-test-")), "state.json"),
+      OPENSHELL_CONFIGS: configs,
+      ENGINE: join(ROOT, "test/fixtures/fake-engine.mjs"),
+      FAKE_IMAGES: "claude-sandbox:latest,claude-browser:latest",
+      FAKE_CREATE_LOG: createLog,
     },
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -391,5 +401,45 @@ test("threads survive a restart, can be resumed without repeating the replay, an
   await c.opened;
   const after = await c.next((m) => m.type === "hello");
   assert.deepEqual(after.sessions, []);
+  c.ws.close();
+});
+
+test("sandbox types: image and policy checks, creating one, and building an image", async () => {
+  const c = connect();
+  await c.opened;
+  c.send({ type: "sandbox_types", reqId: "ty" });
+  const types = (await c.next((m) => m.type === "sandbox_types" && m.reqId === "ty")).types;
+  const byId = Object.fromEntries(types.map((t: any) => [t.id, t]));
+  assert.equal(byId["claude-browser"].imageState, "present");
+  assert.equal(byId["claude-browser"].policy, "browser.yaml");
+  assert.equal(byId["claude-hyperframes"].imageState, "missing");
+  assert.equal(byId["claude-hyperframes"].policy, null, "its policy isn't in this openshell-configs");
+
+  // A type's own policy is required, and so is its image.
+  c.send({ type: "create_sandbox", reqId: "c1", name: "hf-1", sandboxType: "claude-hyperframes", workdir: "/sandbox" });
+  assert.match((await c.next((m) => m.reqId === "c1")).message, /hyperframes.yaml wasn't found/);
+  c.send({ type: "create_sandbox", reqId: "c2", name: "oc-1", sandboxType: "opencode", workdir: "/sandbox" });
+  const missing = await c.next((m) => m.reqId === "c2");
+  assert.match(missing.message, /isn't built yet/);
+  assert.match(missing.hint, /make opencode-sandbox/);
+
+  c.send({ type: "create_sandbox", reqId: "c3", name: "web-1", sandboxType: "claude-browser", workdir: "/sandbox" });
+  assert.equal((await c.next((m) => m.reqId === "c3")).ok, true);
+  const created = readFileSync(createLog, "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  const args = created.at(-1) as string[];
+  const opt = (k: string) => args[args.indexOf(k) + 1];
+  assert.equal(opt("--name"), "web-1");
+  assert.equal(opt("--from"), "claude-browser:latest");
+  assert.equal(opt("--provider"), "claude");
+  assert.equal(opt("--policy"), join(configs, "policies", "browser.yaml"));
+
+  c.send({ type: "build_image", reqId: "b1", sandboxType: "claude-browser" });
+  assert.equal((await c.next((m) => m.reqId === "b1")).ok, true);
+  const done = await c.next((m) => m.type === "image_build" && m.build.state !== "running");
+  assert.equal(done.build.state, "done");
+  assert.ok(done.build.lines.includes("step 2"));
   c.ws.close();
 });

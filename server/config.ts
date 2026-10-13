@@ -33,24 +33,28 @@ export function agentInfo(a: AgentConfig): AgentInfo {
   return { id: a.id, label: a.label, cmd: a.cmd, hasModelEnv: !!a.modelEnv };
 }
 
-/** The policy sandbox.sh uses when it creates sandboxes, if we can find it. */
-export function findPolicy(): string | undefined {
-  if (process.env.OPENSHELL_POLICY) return process.env.OPENSHELL_POLICY;
+/** The openshell-configs checkout (its policies and image Dockerfiles), if we can find it. */
+export function findConfigs(): string | undefined {
   const dirs = [
     process.env.OPENSHELL_CONFIGS,
     join(homedir(), "openshell-configs", "openshell-configs"),
     join(homedir(), "openshell-configs"),
     join(ROOT, "..", "openshell-configs"),
   ].filter(Boolean) as string[];
-  for (const d of dirs) {
-    const p = join(d, "policies", "vscode-terminal.yaml");
-    if (existsSync(p)) return p;
-  }
-  return undefined;
+  return dirs.find((d) => existsSync(join(d, "policies", "vscode-terminal.yaml")));
+}
+
+/** The policy sandbox.sh uses when it creates sandboxes, if we can find it. */
+export function findPolicy(): string | undefined {
+  if (process.env.OPENSHELL_POLICY) return process.env.OPENSHELL_POLICY;
+  const d = findConfigs();
+  return d && join(d, "policies", "vscode-terminal.yaml");
 }
 
 export interface Remembered {
   agent?: AgentId;
+  /** The sandbox type it was created as, by the console. */
+  type?: string;
   cwd?: string;
   model?: string;
   repos?: RepoLink[];

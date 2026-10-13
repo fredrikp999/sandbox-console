@@ -10,16 +10,18 @@
 // ~/.claude/skills/<name>/). Context files are added to the agent's global
 // instructions (~/.claude/CLAUDE.md, ~/.config/opencode/AGENTS.md) between marker
 // lines, so they can be updated or taken out again without touching the rest.
+// Tools (command-line programs) are fetched on this machine; see tools.ts.
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CatalogItem, CatalogKind, InstalledItem } from "../shared/protocol.ts";
 import { ROOT } from "./config.ts";
 import { CliError, execScript, upload } from "./openshell.ts";
+import * as tools from "./tools.ts";
 
 export const USER_CATALOG = process.env.CONSOLE_CATALOG ?? join(homedir(), ".config", "sandbox-console", "catalog");
-export const KINDS: CatalogKind[] = ["agent", "skill", "context"];
+export const KINDS: CatalogKind[] = ["agent", "skill", "context", "tool"];
 /** Names that are safe as a file name and in a shell argument. */
 export const ITEM_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_BYTES = 10_000_000;
@@ -32,8 +34,13 @@ const SKIP = new Set([".git", "node_modules", ".DS_Store", "__pycache__"]);
 export type Layout = "claude" | "opencode";
 const HOME = "/sandbox";
 export const PLACES: Record<Layout, Record<CatalogKind, string>> = {
-  claude: { agent: `${HOME}/.claude/agents`, skill: `${HOME}/.claude/skills`, context: `${HOME}/.claude/CLAUDE.md` },
-  opencode: { agent: `${HOME}/.config/opencode/agents`, skill: `${HOME}/.config/opencode/skills`, context: `${HOME}/.config/opencode/AGENTS.md` },
+  claude: { agent: `${HOME}/.claude/agents`, skill: `${HOME}/.claude/skills`, context: `${HOME}/.claude/CLAUDE.md`, tool: tools.TOOLS_DIR },
+  opencode: {
+    agent: `${HOME}/.config/opencode/agents`,
+    skill: `${HOME}/.config/opencode/skills`,
+    context: `${HOME}/.config/opencode/AGENTS.md`,
+    tool: tools.TOOLS_DIR,
+  },
 };
 
 interface Source {
@@ -48,12 +55,22 @@ function sources(): Source[] {
   return [
     {
       label: "Your catalog",
-      dirs: { agent: [join(USER_CATALOG, "agents")], skill: [join(USER_CATALOG, "skills")], context: [join(USER_CATALOG, "context")] },
+      dirs: {
+        agent: [join(USER_CATALOG, "agents")],
+        skill: [join(USER_CATALOG, "skills")],
+        context: [join(USER_CATALOG, "context")],
+        tool: [join(USER_CATALOG, "tools")],
+      },
       format: "claude",
     },
     {
       label: "Built in",
-      dirs: { agent: [join(ROOT, "catalog", "agents")], skill: [join(ROOT, "catalog", "skills")], context: [join(ROOT, "catalog", "context")] },
+      dirs: {
+        agent: [join(ROOT, "catalog", "agents")],
+        skill: [join(ROOT, "catalog", "skills")],
+        context: [join(ROOT, "catalog", "context")],
+        tool: [join(ROOT, "catalog", "tools")],
+      },
       format: "claude",
     },
     { label: "~/.claude", dirs: { agent: [join(h, ".claude", "agents")], skill: [join(h, ".claude", "skills")] }, format: "claude" },
@@ -194,7 +211,37 @@ function describe(f: Front): string {
   return lines.find((l) => l && !l.startsWith("#") && !l.startsWith("<!--")) ?? lines.find((l) => l.startsWith("#"))?.replace(/^#+\s*/, "") ?? "";
 }
 
+async function readTool(dir: string, entry: string, src: Source): Promise<Entry | null> {
+  const name = entry.replace(/\.json$/, "");
+  if (!entry.endsWith(".json") || !ITEM_NAME.test(name)) return null;
+  const path = join(dir, entry);
+  const text = await readFile(path, "utf8").catch(() => null);
+  if (text === null) return null;
+  const item: Entry = {
+    id: `tool:${name}`,
+    kind: "tool",
+    name,
+    description: "",
+    source: src.label,
+    path,
+    format: src.format,
+    files: 1,
+    bytes: text.length,
+    hash: "",
+  };
+  try {
+    const spec = JSON.parse(text) as tools.ToolSpec;
+    item.description = String(spec.description ?? spec.npm ?? spec.binary ?? "").slice(0, 400);
+    item.problem = tools.check(spec);
+    item.hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  } catch (e) {
+    item.problem = `Not valid JSON: ${(e as Error).message}`;
+  }
+  return item;
+}
+
 async function readItem(kind: CatalogKind, dir: string, entry: string, src: Source): Promise<Entry | null> {
+  if (kind === "tool") return readTool(dir, entry, src);
   const name = kind === "skill" ? entry : entry.replace(/\.md$/, "");
   if (kind !== "skill" && !entry.endsWith(".md")) return null;
   if (!ITEM_NAME.test(name)) return null;
@@ -263,6 +310,7 @@ export async function find(kind: CatalogKind, name: string): Promise<Entry> {
 
 /** The main file, as it would be installed for `layout`. */
 export async function preview(item: Entry, layout: Layout): Promise<string> {
+  if (item.kind === "tool") return readFile(item.path, "utf8");
   const main = item.kind === "skill" ? join(item.path, "SKILL.md") : item.path;
   let text = await readFile(main, "utf8");
   if (item.kind === "agent") text = convertAgent(text, item.name, item.format, layout);
@@ -393,10 +441,20 @@ case $kind in
 esac
 `;
 
-// $1 agents dir, $2 skills dir, $3 context file. Prints "<kind> <name>" lines.
+// $1 the uploaded tar, $2 the tool's name.
+const INSTALL_TOOL = `set -e
+tar=$1
+tmp=$(mktemp -d "${HOME}/.sandbox-console.XXXXXX")
+trap 'rm -rf "$tmp" "$tar"' EXIT
+tar -xf "$tar" -C "$tmp"
+set -- "$tmp/$2" "$2"
+${tools.INSTALL_TOOL}`;
+
+// $1 agents dir, $2 skills dir, $3 context file, $4 tools dir. Prints "<kind> <name>" lines.
 const PRESENT = `
 for f in "$1"/*.md; do [ -f "$f" ] && n=\${f##*/} && echo "agent \${n%.md}"; done
 for d in "$2"/*/; do [ -f "$d/SKILL.md" ] && d=\${d%/} && echo "skill \${d##*/}"; done
+for d in "$4"/*/; do [ -f "$d/.commands" ] && d=\${d%/} && echo "tool \${d##*/}"; done
 [ -f "$3" ] && sed -n 's/^<!-- sandbox-console:begin \\(.*\\) -->$/context \\1/p' "$3"
 exit 0
 `;
@@ -408,11 +466,11 @@ function failed(what: string, r: { code: number | null; stdout: string; stderr: 
 /** Which agents, skills and context blocks are in the sandbox now, by "<kind>:<name>". */
 export async function present(sandbox: string, layout: Layout): Promise<string[]> {
   const p = PLACES[layout];
-  const r = await execScript(sandbox, PRESENT, [p.agent, p.skill, p.context], 60_000);
+  const r = await execScript(sandbox, PRESENT, [p.agent, p.skill, p.context, p.tool], 60_000);
   if (r.code !== 0) throw failed("Couldn't look in the sandbox", r);
   return r.stdout
     .split("\n")
-    .map((l) => /^(agent|skill|context) (\S+)$/.exec(l.trim()))
+    .map((l) => /^(agent|skill|context|tool) (\S+)$/.exec(l.trim()))
     .filter((m): m is RegExpExecArray => !!m && ITEM_NAME.test(m[2]))
     .map((m) => `${m[1]}:${m[2]}`);
 }
@@ -422,6 +480,10 @@ export async function install(sandbox: string, item: Entry, layout: Layout, log:
   if (item.problem) throw new CliError(item.problem, "");
   const dir = await mkdtemp(join(tmpdir(), "sandbox-console-catalog-"));
   try {
+    if (item.kind === "tool") {
+      await installTool(sandbox, item, dir, log);
+      return { kind: item.kind, name: item.name, source: item.source, hash: item.hash, at: Date.now() };
+    }
     const file = join(dir, `.sandbox-console-${randomBytes(6).toString("hex")}.tar`);
     await writeFile(file, tar(await payload(item, layout)));
     await upload(sandbox, file, `${HOME}/`);
@@ -439,7 +501,33 @@ export async function install(sandbox: string, item: Entry, layout: Layout, log:
   }
 }
 
+/** Fetch a tool here for the sandbox's platform, then copy it in with its launchers. */
+async function installTool(sandbox: string, item: Entry, dir: string, log: string[]) {
+  const spec = JSON.parse(await readFile(item.path, "utf8")) as tools.ToolSpec;
+  const platform = await tools.platform(sandbox);
+  const work = join(dir, "fetch");
+  await mkdir(work);
+  const got = await tools.prepare(spec, platform, work);
+  log.push(...got.log);
+  const files = await Promise.all(got.files.map(async (f) => ({ rel: `${item.name}/${f.rel}`, data: await readFile(f.abs), exec: f.exec })));
+  files.push({ rel: `${item.name}/.commands`, data: Buffer.from(`${got.commands.map((c) => c.name).join("\n")}\n`), exec: false });
+  for (const c of got.commands) files.push({ rel: `${item.name}/.launchers/${c.name}`, data: Buffer.from(tools.launcher(item.name, c)), exec: true });
+  const file = join(dir, `.sandbox-console-${randomBytes(6).toString("hex")}.tar`);
+  await writeFile(file, tar(files));
+  await upload(sandbox, file, `${HOME}/`);
+  const r = await execScript(sandbox, INSTALL_TOOL, [`${HOME}/${file.slice(dir.length + 1)}`, item.name], 300_000);
+  if (r.code !== 0) throw failed(`Couldn't put ${item.name} into the sandbox`, r);
+  const names = got.commands.map((c) => c.name).join(", ");
+  log.push(`Installed ${item.name} in ${tools.TOOLS_DIR}/${item.name}. Run it as ${names} (in ${tools.BIN_DIR}).`);
+}
+
 export async function remove(sandbox: string, kind: CatalogKind, name: string, layout: Layout, log: string[]) {
+  if (kind === "tool") {
+    const r = await execScript(sandbox, tools.REMOVE_TOOL, [name], 60_000);
+    if (r.code !== 0) throw failed(`Couldn't remove ${name} from the sandbox`, r);
+    log.push(`Removed ${name} and its commands.`);
+    return;
+  }
   const dest = PLACES[layout][kind];
   const r = await execScript(sandbox, REMOVE, [kind, name, dest], 60_000);
   if (r.code !== 0) throw failed(`Couldn't remove ${name} from the sandbox`, r);

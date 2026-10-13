@@ -13,6 +13,13 @@
 import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
+// The bridge starts agents as `sh -c 'PATH="/sandbox/.local/bin:$PATH" exec "$@"' sh <cmd>`
+// (session.ts); here the agent is simulated, so drop the wrapper.
+{
+  const i = args.indexOf("--");
+  if (args[0] === "sandbox" && args[1] === "exec" && args[i + 1] === "sh" && args[i + 3]?.startsWith('PATH="/sandbox/.local/bin:'))
+    args.splice(i + 1, 4);
+}
 const out = (o) => process.stdout.write(`${JSON.stringify(o, null, 2)}\n`);
 const SANDBOXES = [
   { id: "1", name: "opencode-demo", phase: "Ready", created_at: "2026-10-11 05:20:23", conditions: [{ type: "Ready", status: "True" }] },
@@ -28,7 +35,8 @@ const SANDBOXES = [
 
 const [a, b] = args;
 const ROOT = process.env.FAKE_SANDBOX_ROOT;
-const inBox = (p) => p.replaceAll("/sandbox", ROOT);
+// Only the path /sandbox, not names that start with it (/sandbox-console/…).
+const inBox = (p) => p.replace(/\/sandbox(?![\w.-])/g, ROOT);
 if (ROOT && a === "sandbox" && b === "exec" && args.includes("sh")) {
   const { spawnSync } = await import("node:child_process");
   const [script, ...rest] = args.slice(args.indexOf("--") + 3);
@@ -41,6 +49,10 @@ if (ROOT && a === "sandbox" && b === "exec" && args.includes("sh")) {
   const src = b === "download" ? inBox(from) : from;
   const dir = b === "upload" ? inBox(to) : to;
   copyFileSync(src, join(dir, basename(src)));
+} else if (a === "sandbox" && b === "create") {
+  // The bridge test reads back what it was asked to create.
+  if (process.env.FAKE_CREATE_LOG) (await import("node:fs")).appendFileSync(process.env.FAKE_CREATE_LOG, `${JSON.stringify(args)}\n`);
+  console.log(`Created sandbox ${args[args.indexOf("--name") + 1]}`);
 } else if (a === "status") out({ gateway: "openshell", status: "connected", version: "fake" });
 else if (a === "sandbox" && b === "list") out({ sandboxes: SANDBOXES });
 else if (a === "sandbox" && b === "get") {

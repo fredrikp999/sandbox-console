@@ -1,0 +1,4 @@
+{
+  "description": "Code formatter for JavaScript, TypeScript, CSS, HTML, JSON, Markdown and YAML.",
+  "npm": "prettier@3.9.10"
+}

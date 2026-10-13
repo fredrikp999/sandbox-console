@@ -8,6 +8,7 @@ import type {
   CatalogKind,
   ClientMessage,
   GatewayStatus,
+  ImageBuild,
   NetworkHost,
   RepoLink,
   RepoOp,
@@ -17,13 +18,14 @@ import type {
   ServerMessage,
 } from "../shared/protocol.ts";
 import * as catalog from "./catalog.ts";
-import { type AgentConfig, agentInfo, findPolicy, loadAgents, StateStore } from "./config.ts";
+import { type AgentConfig, agentInfo, findConfigs, findPolicy, loadAgents, StateStore } from "./config.ts";
 import * as editor from "./editor.ts";
 import type { Explained } from "./hints.ts";
 import * as os from "./openshell.ts";
 import * as repos from "./repos.ts";
 import { Session, type SessionHost, type Thread } from "./session.ts";
 import { type StoredThread, ThreadStore } from "./threadstore.ts";
+import * as types from "./types.ts";
 import { NEW_SANDBOX_NAME, parseClientMessage, SANDBOX_NAME } from "./validate.ts";
 
 const LIST_EVERY = 3_000;
@@ -43,6 +45,10 @@ export class Bridge implements SessionHost {
   readonly agents = loadAgents();
   readonly state = new StateStore();
   readonly policy = findPolicy();
+  readonly configs = findConfigs();
+  readonly types = types.loadTypes();
+  /** The image build running or last run; one at a time. */
+  private build: ImageBuild | null = null;
   readonly editors = editor.availableEditors();
   private threadStore = new ThreadStore(join(dirname(this.state.file), "threads"));
   /** Saved threads that no agent process has loaded since the bridge started (or the process exited). Shown as exited. */
@@ -289,6 +295,33 @@ export class Bridge implements SessionHost {
 
       case "create_sandbox":
         return this.create(tab, msg);
+
+      case "sandbox_types":
+        this.send(tab, {
+          type: "sandbox_types",
+          reqId: msg.reqId,
+          types: await types.describe(this.types, this.configs),
+          build: this.build,
+          buildNote: this.configs ? undefined : "openshell-configs wasn't found (set OPENSHELL_CONFIGS), so images can't be built from here.",
+        });
+        return;
+
+      case "build_image": {
+        const t = this.types.find((x) => x.id === msg.sandboxType);
+        if (!t) throw new Error(`Unknown sandbox type ${msg.sandboxType}`);
+        if (!this.configs)
+          throw Object.assign(new Error("openshell-configs wasn't found, so the image can't be built from here."), {
+            hint: "Set OPENSHELL_CONFIGS to your checkout.",
+          });
+        if (this.build?.state === "running") throw new Error(`${this.build.target} is being built. Wait for it to finish.`);
+        this.build = types.build(t, this.configs, (b) => {
+          this.build = b;
+          this.broadcast({ type: "image_build", build: b });
+        });
+        this.broadcast({ type: "image_build", build: this.build });
+        this.send(tab, { type: "result", reqId: msg.reqId, ok: true, message: `Building ${t.image}…` });
+        return;
+      }
 
       case "repo":
         return this.repo(tab, msg);
@@ -553,12 +586,29 @@ export class Bridge implements SessionHost {
       throw new Error("Use lowercase letters, digits and dashes for the name (max 63 characters).");
     }
     if (this.raw.some((s) => s.name === name)) throw new Error(`A sandbox named ${name} already exists.`);
-    const agent = this.agent(msg.agent);
-    if (!agent.image) throw new Error(`No image is configured for ${agent.label} in server/agents.json.`);
+    const t = msg.sandboxType ? this.types.find((x) => x.id === msg.sandboxType) : undefined;
+    if (msg.sandboxType && !t) throw new Error(`Unknown sandbox type ${msg.sandboxType}`);
+    const agent = this.agent(t?.agent ?? msg.agent ?? "");
+    const image = t?.image ?? agent.image;
+    if (!image) throw new Error(`No image is configured for ${agent.label} in server/agents.json.`);
+    let policy = this.policy;
+    if (t?.policy) {
+      policy = types.policyPath(t, this.configs);
+      // Its own policy is part of what the type is: without it, don't fall back to another.
+      if (!policy)
+        throw Object.assign(new Error(`policies/${t.policy} wasn't found, so ${t.label} can't be created.`), {
+          hint: "Set OPENSHELL_CONFIGS to your openshell-configs checkout.",
+        });
+    }
+    if (t && (await types.imageState(image)) === "missing") {
+      throw Object.assign(new Error(`The image ${image} isn't built yet.`), {
+        hint: `Build it first (make ${t.build ?? "images"} in openshell-configs).`,
+      });
+    }
     const workdir = msg.workdir?.trim() || "/sandbox";
-    this.state.set(name, { agent: agent.id, cwd: workdir });
+    this.state.set(name, { agent: agent.id, cwd: workdir, type: t?.id });
     try {
-      await os.createSandbox({ name, image: agent.image, provider: agent.provider, policy: this.policy });
+      await os.createSandbox({ name, image, provider: agent.provider, policy });
     } catch (e) {
       this.state.forget(name);
       throw e;
@@ -669,6 +719,7 @@ export class Bridge implements SessionHost {
         agent,
         agentSource,
         message: s.phase === "Ready" ? undefined : os.readyMessage(s),
+        type: this.types.find((t) => t.id === remembered.type)?.label,
         cwd: remembered.cwd,
         model: remembered.model,
         repos: remembered.repos ?? [],

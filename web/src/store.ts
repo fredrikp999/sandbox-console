@@ -1,7 +1,16 @@
 // Client state: one WebSocket to the bridge, the sandbox list, and a folded
 // conversation per open session. Reconnects and replays what it missed.
 import { useSyncExternalStore } from "react";
-import type { AgentInfo, ClientMessage, EditorInfo, GatewayStatus, SandboxRow, ServerMessage, SessionInfo } from "../../shared/protocol.ts";
+import type {
+  AgentInfo,
+  ClientMessage,
+  EditorInfo,
+  GatewayStatus,
+  ImageBuild,
+  SandboxRow,
+  ServerMessage,
+  SessionInfo,
+} from "../../shared/protocol.ts";
 import { authHeaders, getToken, initToken, wsProtocols } from "./auth.ts";
 import { apply, type Conversation, emptyConversation } from "./conversation.ts";
 
@@ -20,6 +29,8 @@ export interface State {
   link: Link;
   agents: AgentInfo[];
   editors: EditorInfo[];
+  /** The image build running or last run, from any tab. */
+  build: ImageBuild | null;
   createNote?: string;
   sandboxes: SandboxRow[];
   listError?: string;
@@ -64,6 +75,7 @@ class Store {
     link: "connecting",
     agents: [],
     editors: [],
+    build: null,
     sandboxes: [],
     gateway: null,
     sessions: {},
@@ -261,6 +273,8 @@ class Store {
         return { ...s, sandboxes: m.sandboxes, listError: m.error };
       case "gateway":
         return { ...s, gateway: m.gateway };
+      case "image_build":
+        return { ...s, build: m.build };
       case "session_opened": {
         // Every tab hears about a new thread; only the one that asked switches to it.
         const mine = !!m.reqId && this.pending.has(m.reqId);
@@ -290,6 +304,7 @@ class Store {
       case "repo_result":
       case "editor_opened":
       case "catalog":
+      case "sandbox_types":
         this.settle(m);
         if (m.type === "error" && !m.reqId) {
           const id = m.sessionId;

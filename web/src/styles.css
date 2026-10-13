@@ -1827,3 +1827,130 @@ select.repo-pick {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* ---------- new sandbox: types and image builds ---------- */
+.modal.new-sb {
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.types {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.types legend {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding: 0;
+}
+.form .types label.type {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--fg);
+  font-weight: 400;
+}
+.form .types label.type.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.types input[type="radio"] {
+  margin: 3px 0 0;
+}
+.type-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.type-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13.5px;
+}
+.type-state {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+.type-state.ok {
+  color: var(--ok);
+}
+.type-state.busy {
+  color: var(--warn);
+}
+.type-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.type-meta {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.type-build {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.build {
+  display: grid;
+  gap: 6px;
+}
+.build-log {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sunken);
+  font: 11px / 1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.build-log.failed {
+  border-color: var(--bad);
+}
+.cat-sec.closed {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+.cat-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cat-sec-head:hover {
+  color: var(--fg);
+}
+.cat-total {
+  font: 500 11px var(--body);
+  letter-spacing: 0;
+  color: var(--muted);
+  opacity: 0.8;
+}

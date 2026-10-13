@@ -26,6 +26,8 @@ export interface SandboxRow {
   agentSource: "policy" | "name" | "remembered" | null;
   /** Error text from the Ready condition, when the sandbox isn't Ready. */
   message?: string;
+  /** The sandbox type's label, if the console created it. */
+  type?: string;
   /** Defaults the console remembers for this sandbox. */
   cwd?: string;
   model?: string;
@@ -95,7 +97,35 @@ export interface RepoReview {
 
 export type RepoOp = "link" | "send" | "get" | "review" | "merge" | "push" | "unlink";
 
-export type CatalogKind = "agent" | "skill" | "context";
+/**
+ * A kind of sandbox "New sandbox" can create: an image with everything installed
+ * when it was built (on this machine, from openshell-configs), and the policy
+ * that goes with it.
+ */
+export interface SandboxType {
+  id: string;
+  label: string;
+  description: string;
+  agent: AgentId;
+  image: string;
+  /** The policy file's name in openshell-configs/policies, or null if it isn't there. */
+  policy: string | null;
+  /** The openshell-configs make target that builds the image. */
+  build?: string;
+  /** Whether the image is in the local container engine. */
+  imageState: "present" | "missing" | "unknown";
+}
+
+/** An image being built (one at a time), with the end of its output. */
+export interface ImageBuild {
+  sandboxType: string;
+  target: string;
+  state: "running" | "done" | "failed";
+  lines: string[];
+  startedAt: number;
+}
+
+export type CatalogKind = "agent" | "skill" | "context" | "tool";
 
 /** Something in the catalog on this machine that can be put into a sandbox. */
 export interface CatalogItem {
@@ -220,7 +250,12 @@ export type SessionEvent =
 
 export type ClientMessage =
   | { type: "list_sandboxes" }
-  | { type: "create_sandbox"; reqId: string; name: string; agent: AgentId; workdir: string }
+  /** From a sandbox type (its image, policy and agent), or else from the agent's image in agents.json. */
+  | { type: "create_sandbox"; reqId: string; name: string; agent?: AgentId; sandboxType?: string; workdir: string }
+  /** The sandbox types, with whether each image is built. */
+  | { type: "sandbox_types"; reqId: string }
+  /** Build a sandbox type's image with `make <target>` in openshell-configs. */
+  | { type: "build_image"; reqId: string; sandboxType: string }
   | { type: "delete_sandbox"; reqId: string; name: string }
   | { type: "set_sandbox_agent"; name: string; agent: AgentId }
   | {
@@ -287,6 +322,16 @@ export type ServerMessage =
       editors: EditorInfo[];
     }
   | { type: "sandboxes"; sandboxes: SandboxRow[]; error?: string }
+  | {
+      type: "sandbox_types";
+      reqId: string;
+      types: SandboxType[];
+      build: ImageBuild | null;
+      /** Why images can't be built from here, if they can't. */
+      buildNote?: string;
+    }
+  /** Progress of an image build, to every tab. */
+  | { type: "image_build"; build: ImageBuild }
   | { type: "gateway"; gateway: GatewayStatus }
   | { type: "session_opened"; reqId?: string; session: SessionInfo }
   | { type: "session_info"; session: SessionInfo }

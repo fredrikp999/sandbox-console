@@ -6,7 +6,9 @@ type Field = "s" | "s?" | "n" | "s|null";
 
 const SPEC: Record<ClientMessage["type"], Record<string, Field>> = {
   list_sandboxes: {},
-  create_sandbox: { reqId: "s", name: "s", agent: "s", workdir: "s" },
+  create_sandbox: { reqId: "s", name: "s", agent: "s?", sandboxType: "s?", workdir: "s" },
+  sandbox_types: { reqId: "s" },
+  build_image: { reqId: "s", sandboxType: "s" },
   delete_sandbox: { reqId: "s", name: "s" },
   set_sandbox_agent: { name: "s", agent: "s" },
   open_session: { reqId: "s", sandbox: "s", agent: "s", cwd: "s", model: "s?", loadSessionId: "s?" },

@@ -57,7 +57,7 @@ This uses a fake `openshell` with a scripted agent:
 
 **Sandboxes (left).** Click a sandbox to open it.
 - **No agent session yet:** pick the agent if the console can't tell which one the sandbox has, then the working directory, then **Start session**.
-- **New sandbox:** creates one the same way `sandbox.sh` does: it runs `sleep infinity`, gets the openshell-configs policy, and stays around until you delete it.
+- **New sandbox:** pick a type, then a name. It's created the same way `sandbox.sh` does: it runs `sleep infinity`, gets the type's policy, and stays around until you delete it. See "Installing software" below.
 
 **Conversation (middle).**
 
@@ -104,14 +104,19 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 - **What the sandbox gets:** only bundles of the base branch. No other branches, no remote, no credentials. Git with credentials runs only on this machine, and never prompts (a prompt would hang): use SSH keys in ssh-agent or a credential helper.
 - **Unlink** forgets the link. No files are deleted.
 
-**Catalog.** Agents, skills and context files on this machine, to add to a sandbox with one click.
-- **Where they come from:** your catalog folder (`~/.config/sandbox-console/catalog`, with `agents/<name>.md`, `skills/<name>/SKILL.md` and `context/<name>.md`), the examples in [`catalog/`](catalog), and the skills and agents you already have in `~/.claude`, `~/.agents` and `~/.config/opencode`. If a name is in more than one, the first wins.
+**Installing software.** The sandbox user isn't root and `/usr` is read-only, and the sandbox can't reach package registries. Opening one "just for the install" would open it to the agent too: the network rules tell programs apart by their binary, and npm, most CLIs and Claude Code are all `node`. So software comes in one of two ways, and the agent never gets a registry or download site:
+- **Sandbox types** (in New sandbox) for anything that needs system packages, a browser or its own network rules. A type is an openshell-configs image, built on this machine from its Dockerfile, plus the policy that goes with it: Claude Code, Claude Code + browser (`claude-browser`, `policies/browser.yaml`), Claude Code + HyperFrames (`claude-hyperframes`, `policies/hyperframes.yaml`: the HyperFrames CLI, FFmpeg, fonts, Chromium and the skills), and OpenCode. The dialog shows which images are built; **Build image** runs `make <image>` in openshell-configs and shows its output, and keeps going if you close the dialog. A sandbox's image is fixed when it's created, so for HyperFrames you create a HyperFrames sandbox. Types are in `server/sandbox-types.json`.
+- **Tools** (in the Catalog) for command-line programs that run as the sandbox user: an npm package at an exact version, or a binary with its SHA-256. They're fetched here on the host for the sandbox's CPU and C library (npm with `--ignore-scripts --os=linux --cpu=… --libc=…`, which also checks the registry's integrity hashes) and copied in. Packages that would have to be compiled are refused; packages whose install scripts weren't run are named. A tool lives in `~/.local/share/sandbox-console/tools/<name>`, with a launcher per command in `~/.local/bin`. The console starts agents with `~/.local/bin` on `PATH` and adds it to `~/.profile` and `~/.bashrc` for the VS Code terminal. An existing command in `~/.local/bin` that the console didn't put there is never replaced.
+
+**Catalog.** Agents, skills, context files and tools on this machine, to add to a sandbox with one click.
+- **Where they come from:** your catalog folder (`~/.config/sandbox-console/catalog`, with `agents/<name>.md`, `skills/<name>/SKILL.md`, `context/<name>.md` and `tools/<name>.json`), the examples in [`catalog/`](catalog), and the skills and agents you already have in `~/.claude`, `~/.agents` and `~/.config/opencode`. If a name is in more than one, the first wins.
 - **Where they go:** where the sandbox's agent looks, in its home (`/sandbox`). Claude Code: `~/.claude/agents/`, `~/.claude/skills/` and `~/.claude/CLAUDE.md`. OpenCode: `~/.config/opencode/agents/`, `~/.config/opencode/skills/` and `~/.config/opencode/AGENTS.md`.
 - **Agents** are written in Claude Code's format (`name`, `description`, `tools`) and rewritten for OpenCode (`mode: subagent`, with `edit`, `bash` and `webfetch` denied when `tools` leaves them out). The model isn't carried over, since the two name models differently.
 - **Context files** are added to the agent's global instructions between `<!-- sandbox-console:begin <name> -->` and `…:end <name> -->` lines. What else is in that file stays as it is, and **×** takes only that block out.
 - **Updates:** an item shows **Update** when the catalog's copy changed since it was added, and **Replace** when the sandbox has its own item of that name.
 - **When it applies:** new threads pick it up. A running thread may not until the agent restarts (⋯ → Stop the agent).
-- **Limits:** skills skip dotfiles, `.git` and `node_modules`, and can be up to 10 MB.
+- **Tools** are described in a JSON file. `{"description": "…", "npm": "prettier@3.9.10"}`, or for a binary `{"binary": "jq", "downloads": {"linux-arm64": {"url": "https://…", "sha256": "…"}, "linux-x64": {…}}}`, with `"path"` inside an archive (`.tar.gz`, `.tar.xz`, `.zip`) when the download is one. The built-in ones are jq and Prettier.
+- **Limits:** skills skip dotfiles, `.git` and `node_modules`, and can be up to 10 MB. Tools can be up to 300 MB.
 
 **Getting code out without a linked repository.** Have the agent commit, then use "download the agent's commits as a git bundle" in the Changes tab (or `/bundle <dir>`).
 - **What's in it:** the commits on the current branch of the session's directory that aren't in `host/main` or `host/master`. Those branches exist when the repo came in through openshell-configs' `bundle.sh in`; without them, the whole branch.
@@ -124,8 +129,10 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 | `server/agents.json` | Agent registry: the command that starts each agent in ACP mode, how its model is chosen, default model, image and provider for "New sandbox", and the hint shown when the command is missing. `CONSOLE_AGENTS` points at another file. |
 | `CONSOLE_PORT`, `--port` | Port on 127.0.0.1. Default 7801. |
 | `OPENSHELL_BIN` | The `openshell` CLI. Default `openshell` on the PATH. |
-| `OPENSHELL_CONFIGS` | Your openshell-configs checkout. New sandboxes get its `policies/vscode-terminal.yaml`. Also looked for in `~/openshell-configs/openshell-configs`. |
-| `OPENSHELL_POLICY` | A policy file for new sandboxes, instead of the one above. |
+| `server/sandbox-types.json` | Sandbox types for "New sandbox": label, agent, image, policy file in openshell-configs' `policies/`, and the make target that builds the image. `CONSOLE_TYPES` points at another file. |
+| `OPENSHELL_CONFIGS` | Your openshell-configs checkout: the policies of the sandbox types, and the Makefile that builds their images. Also looked for in `~/openshell-configs/openshell-configs`. |
+| `OPENSHELL_POLICY` | A policy file for sandboxes created without a type, instead of `policies/vscode-terminal.yaml`. |
+| `ENGINE` | The container engine images are checked and built with, as in openshell-configs' Makefile. Default `podman`. |
 | `CONSOLE_STATE` | Where the agent, directory and model per sandbox are remembered. Default `~/.config/sandbox-console/state.json`. Threads (their conversations) are saved in a `threads/` folder next to it. |
 | `CONSOLE_REPOS` | Where repositories given as a URL are cloned. Default `~/sandbox-repos`. |
 | `CONSOLE_CATALOG` | Your catalog folder. Default `~/.config/sandbox-console/catalog`. |
@@ -171,6 +178,9 @@ server/              the bridge (Node, TypeScript, run with tsx)
   editor.ts            "Open in VS Code": SSH host entry, then the editor's CLI on a vscode-remote:// folder
   repos.ts             repositories: clone/pull on the host, bundles in and out, review, merge, push
   catalog.ts           the catalog: reading it, agent format conversion, copying into a sandbox
+  tools.ts             catalog tools: fetched on the host (npm, or a checked download), launchers in ~/.local/bin
+  types.ts             sandbox types: their images (checked and built with make) and policies
+  sandbox-types.json   sandbox type registry
   threadstore.ts       threads on disk
   validate.ts          shape checks for browser messages, sandbox name rules
   eventlog.ts          keeps the per-session event log bounded without breaking replay
@@ -184,8 +194,8 @@ web/                 React UI (Vite)
   src/panels.ts        which side panels are shown
   src/components/      Sidebar, Chat, ConversationLog, Composer, ModelPicker, Inspector, …
   vite.config.ts       UI build and dev server
-catalog/             built-in catalog examples: agents, skills, context files
-test/fixtures/       fake `openshell` CLI with a scripted agent
+catalog/             built-in catalog examples: agents, skills, context files, tools
+test/fixtures/       fake `openshell` CLI with a scripted agent, and a fake container engine
 docs/                design and mockup
 ```
 

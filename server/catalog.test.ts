@@ -1,6 +1,7 @@
 // The catalog end to end: the fake openshell runs the sandbox side on this machine
 // (real sh, tar and awk), with /sandbox mapped to a temporary directory.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +31,7 @@ writeFileSync(join(home, ".claude", "skills", "tool", "scripts", "run.sh"), "#!/
 chmodSync(join(home, ".claude", "skills", "tool", "scripts", "run.sh"), 0o755);
 writeFileSync(join(home, ".claude", "skills", "tool", ".DS_Store"), "junk");
 
-const inBox = (p: string) => p.replace("/sandbox", box);
+const inBox = (p: string) => p.replace(/\/sandbox(?![\w.-])/, box);
 const read = (p: string) => readFileSync(inBox(p), "utf8");
 
 test("lists all sources; the first one with a name wins", async () => {
@@ -118,4 +119,80 @@ test("tar paths longer than 100 bytes use the prefix field", () => {
   const header = t.subarray(512, 1024);
   assert.equal(header.subarray(0, 63).toString(), `${"f".repeat(60)}.md`);
   assert.equal(header.subarray(345, 425).toString(), "d".repeat(80));
+});
+
+test("tools: fetched here, checked, copied in with a launcher, and removed", async () => {
+  const bin = Buffer.from("#!/bin/sh\necho hello\n");
+  const sha = createHash("sha256").update(bin).digest("hex");
+  const real = globalThis.fetch;
+  const fetched: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    fetched.push(String(url));
+    return new Response(String(url).includes("bad") ? Buffer.from("tampered") : bin);
+  }) as typeof fetch;
+  const def = (url: string) =>
+    JSON.stringify({
+      description: "Says hello",
+      binary: "hello",
+      downloads: { "linux-arm64": { url, sha256: sha }, "linux-x64": { url, sha256: sha } },
+    });
+  try {
+    mkdirSync(join(mine, "tools"), { recursive: true });
+    writeFileSync(join(mine, "tools", "hello.json"), def("https://example.test/hello"));
+    writeFileSync(join(mine, "tools", "evil.json"), def("https://example.test/bad"));
+    writeFileSync(join(mine, "tools", "loose.json"), JSON.stringify({ npm: "prettier@^3" }));
+    await new Promise((r) => setTimeout(r, 3100)); // past the catalog's cache
+    const items = await catalog.list();
+    assert.match(items.find((i) => i.id === "tool:loose")?.problem ?? "", /exact version/);
+    assert.equal(items.find((i) => i.id === "tool:jq")?.source, "Built in");
+
+    const log: string[] = [];
+    await catalog.install("claude-demo", await catalog.find("tool", "hello"), "claude", log);
+    await catalog.install("claude-demo", await catalog.find("tool", "hello"), "claude", log);
+    assert.equal(fetched.length, 2);
+    const launcher = read("/sandbox/.local/bin/hello");
+    assert.match(
+      launcher,
+      /^#!\/bin\/sh\n# sandbox-console tool hello\nexec "\/sandbox\/.local\/share\/sandbox-console\/tools\/hello\/hello" "\$@"\n$/,
+    );
+    assert.ok(statSync(inBox("/sandbox/.local/share/sandbox-console/tools/hello/hello")).mode & 0o100);
+    assert.equal(read("/sandbox/.profile").split("sandbox-console:path").length, 2, "PATH is added to ~/.profile once");
+    assert.ok((await catalog.present("claude-demo", "claude")).includes("tool:hello"));
+
+    await assert.rejects(catalog.install("claude-demo", await catalog.find("tool", "evil"), "claude", log), /doesn't match its SHA-256/);
+
+    // A command of the same name that isn't the console's is left alone.
+    writeFileSync(inBox("/sandbox/.local/bin/hello2"), "mine");
+    writeFileSync(join(mine, "tools", "hello2.json"), def("https://example.test/hello").replace('"hello"', '"hello2"'));
+    await new Promise((r) => setTimeout(r, 3100));
+    await assert.rejects(catalog.install("claude-demo", await catalog.find("tool", "hello2"), "claude", log), (e: { detail?: string }) =>
+      /isn't from the console/.test(e.detail ?? ""),
+    );
+    assert.equal(read("/sandbox/.local/bin/hello2"), "mine");
+
+    await catalog.remove("claude-demo", "tool", "hello", "claude", log);
+    assert.ok(!existsSync(inBox("/sandbox/.local/bin/hello")));
+    assert.ok(!existsSync(inBox("/sandbox/.local/share/sandbox-console/tools/hello")));
+    assert.ok(!(await catalog.present("claude-demo", "claude")).includes("tool:hello"));
+    assert.deepEqual(
+      readdirSync(box).filter((f) => f.startsWith(".sandbox-console")),
+      [],
+    );
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("tools: definitions are checked before anything is fetched", async () => {
+  const tools = await import("./tools.ts");
+  assert.equal(tools.check({ npm: "prettier@3.9.10" }), undefined);
+  assert.equal(tools.check({ npm: "@scope/pkg@1.2.3-beta.1" }), undefined);
+  assert.match(tools.check({ npm: "prettier@latest" }) ?? "", /exact version/);
+  assert.match(tools.check({ npm: "prettier@3.9.10", binary: "x" }) ?? "", /either/);
+  assert.match(tools.check({ binary: "../x", downloads: {} }) ?? "", /plain command/);
+  assert.match(tools.check({ binary: "x", downloads: { "linux-x64": { url: "http://x", sha256: "0".repeat(64) } } }) ?? "", /https/);
+  assert.match(
+    tools.check({ binary: "x", downloads: { "linux-x64": { url: "https://x", sha256: "0".repeat(64), path: "../../etc" } } }) ?? "",
+    /relative/,
+  );
 });

@@ -180,6 +180,7 @@ export function Chat() {
   // The rest of the details, one hover away.
   const details = info
     ? [
+        sb?.type && `Type: ${sb.type}`,
         `Agent: ${info.agentCmd.join(" ")}`,
         `Directory: ${info.cwd}`,
         `Session: ${info.sessionId}`,
@@ -189,7 +190,7 @@ export function Chat() {
         .filter(Boolean)
         .join("\n")
     : sb
-      ? `Phase: ${sb.phase}\nCreated: ${sb.created}`
+      ? [`Phase: ${sb.phase}`, `Created: ${sb.created}`, sb.type && `Type: ${sb.type}`].filter(Boolean).join("\n")
       : undefined;
 
   const send = (text: string) => {

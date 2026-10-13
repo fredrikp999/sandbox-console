@@ -1,7 +1,7 @@
-// "Catalog" tab of the inspector: agents, skills and context files on this
-// machine, and which of them the selected sandbox has. Adding one copies it into
-// the sandbox's home, where its agent looks (~/.claude for Claude Code,
-// ~/.config/opencode for OpenCode).
+// "Catalog" tab of the inspector: agents, skills, context files and tools on
+// this machine, and which of them the selected sandbox has. Adding one copies it
+// into the sandbox's home, where its agent looks (~/.claude for Claude Code,
+// ~/.config/opencode for OpenCode). Tools are fetched on this machine first.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CatalogItem, CatalogKind, SandboxCatalog, SandboxRow, ServerMessage } from "../../../shared/protocol.ts";
 import { type RequestError, store, useStore } from "../store.ts";
@@ -13,6 +13,7 @@ const SECTIONS: { kind: CatalogKind; title: string; empty: string }[] = [
   { kind: "agent", title: "Agents", empty: "No agents." },
   { kind: "skill", title: "Skills", empty: "No skills." },
   { kind: "context", title: "Context", empty: "No context files." },
+  { kind: "tool", title: "Tools", empty: "No tools." },
 ];
 
 type Status = "absent" | "added" | "outdated" | "theirs";
@@ -29,6 +30,7 @@ function statusOf(item: CatalogItem, sb: SandboxCatalog | undefined): Status {
 function where(kind: CatalogKind, name: string, places: SandboxCatalog["places"]) {
   if (kind === "agent") return `${places.agent}/${name}.md`;
   if (kind === "skill") return `${places.skill}/${name}/`;
+  if (kind === "tool") return `${places.tool}/${name}/, with its commands in ~/.local/bin`;
   return places.context;
 }
 
@@ -129,6 +131,12 @@ function Item({
           {item.problem && <div className="no">{item.problem}</div>}
           {item.kind === "agent" && <div className="muted">Shown as it's written for this sandbox's agent.</div>}
           {item.kind === "context" && <div className="muted">Added to the agent's own instructions, between marker lines.</div>}
+          {item.kind === "tool" && (
+            <div className="muted">
+              Fetched on this machine for the sandbox's CPU, checked (npm's integrity hashes, or the SHA-256 below), then copied in. The sandbox's
+              network rules don't change.
+            </div>
+          )}
           {previewError ? <div className="no">{previewError}</div> : <pre className="cat-preview">{preview ?? "Loading…"}</pre>}
         </div>
       )}
@@ -144,6 +152,14 @@ export function Catalog({ sb }: { sb: SandboxRow }) {
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  // Sections start collapsed; a filter opens the ones with matches.
+  const [expanded, setExpanded] = useState<ReadonlySet<CatalogKind>>(new Set());
+  const toggle = (kind: CatalogKind) =>
+    setExpanded((e) => {
+      const next = new Set(e);
+      if (!next.delete(kind)) next.add(kind);
+      return next;
+    });
   const ready = sb.phase === "Ready" && !data?.sandbox?.error;
   const agentId = sb.session?.agent ?? sb.agent;
 
@@ -201,7 +217,7 @@ export function Catalog({ sb }: { sb: SandboxRow }) {
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter agents, skills, context"
+            placeholder="Filter agents, skills, context, tools"
             aria-label="Filter the catalog"
           />
           <button type="button" className="icon-btn" onClick={load} title="Read the catalog and the sandbox again" aria-label="Reload catalog">
@@ -236,14 +252,20 @@ export function Catalog({ sb }: { sb: SandboxRow }) {
         SECTIONS.map(({ kind, title, empty }) => {
           const items = shown.filter((i) => i.kind === kind);
           const added = data.items.filter((i) => i.kind === kind && statusOf(i, data.sandbox) !== "absent").length;
+          const total = data.items.filter((i) => i.kind === kind).length;
+          const open = q ? items.length > 0 || expanded.has(kind) : expanded.has(kind);
           return (
-            <div className="blk" key={kind}>
+            <div className={`blk cat-sec${open ? "" : " closed"}`} key={kind}>
               <h5>
-                {title}
+                <button type="button" className="cat-sec-head" onClick={() => toggle(kind)} aria-expanded={open}>
+                  <span className="cat-caret">{open ? "▾" : "▸"}</span>
+                  {title}
+                  <span className="cat-total">{q ? `${items.length} of ${total}` : total}</span>
+                </button>
                 {added > 0 && <span className="cat-count">{added} in the sandbox</span>}
               </h5>
-              {!items.length && <p className="muted">{q ? "Nothing matches." : empty}</p>}
-              {items.length > 0 && (
+              {open && !items.length && <p className="muted">{q ? "Nothing matches." : empty}</p>}
+              {open && items.length > 0 && (
                 <ul className="cat-list">
                   {items.map((i) => (
                     <Item
@@ -278,8 +300,13 @@ export function Catalog({ sb }: { sb: SandboxRow }) {
           )}
           <p className="muted">
             Add your own to <span className="mono">{data.folder}</span>: <span className="mono">agents/&lt;name&gt;.md</span>,{" "}
-            <span className="mono">skills/&lt;name&gt;/SKILL.md</span> or <span className="mono">context/&lt;name&gt;.md</span>. Your skills and
-            agents in ~/.claude, ~/.agents and ~/.config/opencode are listed too.
+            <span className="mono">skills/&lt;name&gt;/SKILL.md</span>, <span className="mono">context/&lt;name&gt;.md</span> or{" "}
+            <span className="mono">tools/&lt;name&gt;.json</span>. Your skills and agents in ~/.claude, ~/.agents and ~/.config/opencode are listed
+            too.
+          </p>
+          <p className="muted">
+            Tools are programs that run as the sandbox user. Anything that needs system packages, a browser or its own network rules (like
+            HyperFrames) comes with a sandbox type instead: choose it under New sandbox.
           </p>
         </div>
       )}

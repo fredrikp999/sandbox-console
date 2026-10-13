@@ -57,8 +57,13 @@ export function agentCommand(sandbox: string, agent: AgentConfig, cwd: string, m
     // `opencode acp` has no -m flag: the model goes in through its config env.
     args.push("--env", `${agent.modelEnv}=${JSON.stringify({ model: model || agent.defaultModel })}`);
   }
-  return [...args, "--", ...agent.cmd];
+  // Tools from the catalog are in ~/.local/bin, which images don't have on PATH.
+  // A shell would read it from ~/.profile, but a login shell may print to stdout,
+  // which is the ACP stream; so it's added here, and the image's PATH kept.
+  return [...args, "--", "sh", "-c", AGENT_PATH, "sh", ...agent.cmd];
 }
+
+export const AGENT_PATH = 'PATH="/sandbox/.local/bin:$PATH" exec "$@"';
 
 /** One ACP session on a sandbox's agent process. */
 export class Thread {

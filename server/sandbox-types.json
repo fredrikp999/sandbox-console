@@ -1,0 +1,34 @@
+{
+  "claude": {
+    "label": "Claude Code",
+    "agent": "claude",
+    "image": "claude-sandbox:latest",
+    "policy": "vscode-terminal.yaml",
+    "build": "claude-sandbox",
+    "description": "Claude Code with git and a terminal. Only Anthropic's API is reachable."
+  },
+  "claude-browser": {
+    "label": "Claude Code + browser",
+    "agent": "claude",
+    "image": "claude-browser:latest",
+    "policy": "browser.yaml",
+    "build": "claude-browser",
+    "description": "Adds a headless Chromium in the sandbox (Playwright MCP), so Claude can open and look at web pages. It may only open the sites listed in policies/browser.yaml."
+  },
+  "claude-hyperframes": {
+    "label": "Claude Code + HyperFrames",
+    "agent": "claude",
+    "image": "claude-hyperframes:latest",
+    "policy": "hyperframes.yaml",
+    "build": "claude-hyperframes",
+    "description": "Videos from HTML: the browser image plus the HyperFrames CLI, FFmpeg, fonts and the HyperFrames skills. The CDNs and fonts compositions load are allowed, read-only."
+  },
+  "opencode": {
+    "label": "OpenCode",
+    "agent": "opencode",
+    "image": "opencode-sandbox:latest",
+    "policy": "vscode-terminal.yaml",
+    "build": "opencode-sandbox",
+    "description": "OpenCode with models through OpenRouter, with git and a terminal."
+  }
+}
