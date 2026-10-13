@@ -81,6 +81,7 @@ Anything else starting with `/` isn't sent, because it would reach the model as 
 **Permission cards.** When the agent asks before acting, answer with one of its options. Each button also shows what it does ("allows once", "allows always", "rejects"), because the label is the agent's own text. Stop (<kbd>Esc</kbd>) answers an open request with "cancelled".
 
 **Where things are.** The header is about the sandbox, the tabs and conversation about a thread, the right column about the code.
+- **Hiding the side panels:** the buttons at the left and right ends of the header, or <kbd>⌘B</kbd> / <kbd>Ctrl</kbd>+<kbd>B</kbd> for the sandboxes and <kbd>⌥⌘B</kbd> / <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>B</kbd> for the right column. The browser remembers what you hid. In a narrow window the right column opens over the conversation (<kbd>Esc</kbd> or a click outside closes it).
 - **Header:** the sandbox name; agent, directory and context used (hover for the agent command, session id and token totals); the model; **Open in VS Code** (▾ picks the folder, or Cursor; see below); and **⋯** with **Stop the agent** and **Delete sandbox**.
 - **Threads:** the tabs above the conversation. Each is its own ACP session with its own history, model and pending approvals, so one can wait for you while another works. × closes a tab; the thread stays in the sidebar.
 - **Sidebar:** under the selected sandbox, all its threads (open one, or delete it), and **Earlier from the agent…**: sessions the agent itself keeps, loaded with `session/load` as another thread.
@@ -180,6 +181,7 @@ web/                 React UI (Vite)
   src/conversation.ts  folds ACP session/update events into the log
   src/store.ts         WebSocket, reconnect + replay, request/response
   src/auth.ts          the access token
+  src/panels.ts        which side panels are shown
   src/components/      Sidebar, Chat, ConversationLog, Composer, ModelPicker, Inspector, …
   vite.config.ts       UI build and dev server
 catalog/             built-in catalog examples: agents, skills, context files

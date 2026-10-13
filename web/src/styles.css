@@ -108,6 +108,47 @@ button {
   height: 100dvh;
   background: var(--surface);
 }
+.app.no-left {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+.app.no-right {
+  grid-template-columns: 248px minmax(0, 1fr);
+}
+.app.no-left.no-right {
+  grid-template-columns: minmax(0, 1fr);
+}
+.panel-btn {
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 5px;
+}
+.chat-head .panel-btn.left {
+  margin-left: -6px;
+}
+.chat-head.bare {
+  justify-content: space-between;
+}
+.chat-head .title {
+  margin-right: auto;
+}
+/* A narrow window: the inspector opens over the conversation. */
+.app.right-over .inspect {
+  display: flex;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(340px, 100vw);
+  z-index: 30;
+  box-shadow: var(--shadow);
+}
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  background: rgba(10, 16, 20, 0.25);
+}
 .pane {
   min-width: 0;
   display: flex;
@@ -461,7 +502,8 @@ select.opt {
 .log {
   flex: 1;
   overflow: auto;
-  padding: 20px 22px;
+  /* With the side panels hidden, keep lines readable: a centred column. */
+  padding: 20px max(22px, calc((100% - 1000px) / 2));
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -831,7 +873,7 @@ select.opt {
 /* ---------- composer ---------- */
 .composer {
   border-top: 1px solid var(--line);
-  padding: 12px 16px 14px;
+  padding: 12px max(16px, calc((100% - 1012px) / 2)) 14px;
   display: grid;
   gap: 8px;
   position: relative;
@@ -1526,18 +1568,26 @@ select.repo-pick {
 
 /* ---------- responsive ---------- */
 @media (max-width: 1020px) {
-  .app {
+  .app,
+  .app.no-right {
     grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .app.no-left {
+    grid-template-columns: minmax(0, 1fr);
   }
   .inspect {
     display: none;
   }
 }
 @media (max-width: 700px) {
-  .app {
+  .app,
+  .app.no-right {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     height: 100dvh;
+  }
+  .app.no-left {
+    grid-template-rows: minmax(0, 1fr);
   }
   .side {
     border-right: 0;

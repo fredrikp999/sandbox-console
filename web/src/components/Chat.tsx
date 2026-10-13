@@ -7,6 +7,7 @@ import { type RequestError, type SessionView, store, useStore } from "../store.t
 import { Composer, type ConsoleCommand } from "./Composer.tsx";
 import { ConversationLog } from "./ConversationLog.tsx";
 import { flattenOptions, ModelPicker, type PickerHandle } from "./ModelPicker.tsx";
+import { PanelButton } from "./PanelButton.tsx";
 import { SandboxActions } from "./SandboxActions.tsx";
 import { StartSession } from "./StartSession.tsx";
 import { Threads } from "./Threads.tsx";
@@ -68,6 +69,16 @@ function ConfigControls({
           </select>
         );
       })}
+    </div>
+  );
+}
+
+/** A header with only the panel buttons, so a hidden panel can always come back. */
+function Bare() {
+  return (
+    <div className="pane-head chat-head bare">
+      <PanelButton side="left" />
+      <PanelButton side="right" />
     </div>
   );
 }
@@ -134,6 +145,7 @@ export function Chat() {
   if (!selected) {
     return (
       <main className="pane">
+        <Bare />
         <div className="empty">
           <b>Pick a sandbox</b>
           <span>Choose a sandbox on the left to chat with its agent, or create a new one.</span>
@@ -145,6 +157,7 @@ export function Chat() {
   if (!sb && !view) {
     return (
       <main className="pane">
+        <Bare />
         <div className="empty">
           <b>{selected}</b>
           <span>{sandboxes.length ? "This sandbox doesn't exist any more." : "Loading sandboxes…"}</span>
@@ -201,6 +214,7 @@ export function Chat() {
   return (
     <main className="pane">
       <div className="pane-head chat-head">
+        <PanelButton side="left" />
         <div className="title" title={details}>
           <b>{selected}</b>
           <span>{sub}</span>
@@ -208,6 +222,7 @@ export function Chat() {
         <div className="head-tools">
           {view && !dead && <ConfigControls view={view} picker={picker} onError={(text) => setFlash({ tone: "error", text })} />}
           {sb && <SandboxActions sb={sb} sessionId={info?.sessionId} cwd={info?.cwd} alive={!!info && !dead} />}
+          <PanelButton side="right" />
         </div>
       </div>
       {view && <Threads sandbox={selected} onError={(text) => setFlash({ tone: "error", text })} />}
