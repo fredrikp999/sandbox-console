@@ -19,8 +19,8 @@ export interface AgentConfig {
   provider?: string;
   /** Shown when the agent command is missing from the image (exit 127). */
   missingHint?: string;
-  /** Where it looks for agents, skills and global instructions: "claude" (~/.claude) or "opencode" (~/.config/opencode). */
-  layout?: "claude" | "opencode";
+  /** Where it looks for agents, skills and global instructions: "claude" (~/.claude), "opencode" (~/.config/opencode) or "agy" (~/.gemini/config, skills and context only). */
+  layout?: "claude" | "opencode" | "agy";
 }
 
 export function loadAgents(): Map<AgentId, AgentConfig> {

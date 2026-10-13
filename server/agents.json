@@ -21,6 +21,6 @@
     "cmd": ["agy-acp-start"],
     "image": "agy-sandbox:latest",
     "missingHint": "This sandbox's image has no agy-acp-start (the google-antigravity-acp adapter around agy). Rebuild it in openshell-configs with `make agy-sandbox`, then recreate the sandbox. If agy asks you to sign in, log in once with `bin/sandbox.sh agy <sandbox>`.",
-    "layout": "claude"
+    "layout": "agy"
   }
 }

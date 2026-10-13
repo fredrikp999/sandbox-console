@@ -31,7 +31,7 @@ const MAX_PREVIEW = 60_000;
 const SKIP = new Set([".git", "node_modules", ".DS_Store", "__pycache__"]);
 
 /** Where an agent looks for each kind, in the sandbox ($HOME is /sandbox). */
-export type Layout = "claude" | "opencode";
+export type Layout = "claude" | "opencode" | "agy";
 const HOME = "/sandbox";
 export const PLACES: Record<Layout, Record<CatalogKind, string>> = {
   claude: { agent: `${HOME}/.claude/agents`, skill: `${HOME}/.claude/skills`, context: `${HOME}/.claude/CLAUDE.md`, tool: tools.TOOLS_DIR },
@@ -41,7 +41,15 @@ export const PLACES: Record<Layout, Record<CatalogKind, string>> = {
     context: `${HOME}/.config/opencode/AGENTS.md`,
     tool: tools.TOOLS_DIR,
   },
+  // agy reads skills and rules from ~/.gemini/config. It has no agent (subagent) files, so agent is "".
+  agy: { agent: "", skill: `${HOME}/.gemini/config/skills`, context: `${HOME}/.gemini/config/AGENTS.md`, tool: tools.TOOLS_DIR },
 };
+
+/** Agents can't be installed where the layout has no place for them. */
+function checkPlace(kind: CatalogKind, layout: Layout) {
+  if (!PLACES[layout][kind])
+    throw new CliError(`${layout === "agy" ? "Antigravity CLI" : layout} has no place for ${kind} files.`, "", "Install skills or context instead.");
+}
 
 interface Source {
   label: string;
@@ -310,6 +318,7 @@ export async function find(kind: CatalogKind, name: string): Promise<Entry> {
 
 /** The main file, as it would be installed for `layout`. */
 export async function preview(item: Entry, layout: Layout): Promise<string> {
+  checkPlace(item.kind, layout);
   if (item.kind === "tool") return readFile(item.path, "utf8");
   const main = item.kind === "skill" ? join(item.path, "SKILL.md") : item.path;
   let text = await readFile(main, "utf8");
@@ -452,7 +461,7 @@ ${tools.INSTALL_TOOL}`;
 
 // $1 agents dir, $2 skills dir, $3 context file, $4 tools dir. Prints "<kind> <name>" lines.
 const PRESENT = `
-for f in "$1"/*.md; do [ -f "$f" ] && n=\${f##*/} && echo "agent \${n%.md}"; done
+[ -n "$1" ] && for f in "$1"/*.md; do [ -f "$f" ] && n=\${f##*/} && echo "agent \${n%.md}"; done
 for d in "$2"/*/; do [ -f "$d/SKILL.md" ] && d=\${d%/} && echo "skill \${d##*/}"; done
 for d in "$4"/*/; do [ -f "$d/.commands" ] && d=\${d%/} && echo "tool \${d##*/}"; done
 [ -f "$3" ] && sed -n 's/^<!-- sandbox-console:begin \\(.*\\) -->$/context \\1/p' "$3"
@@ -478,6 +487,7 @@ export async function present(sandbox: string, layout: Layout): Promise<string[]
 /** Copy an item in, replacing one of the same name. Returns what the console remembers about it. */
 export async function install(sandbox: string, item: Entry, layout: Layout, log: string[]): Promise<InstalledItem> {
   if (item.problem) throw new CliError(item.problem, "");
+  checkPlace(item.kind, layout);
   const dir = await mkdtemp(join(tmpdir(), "sandbox-console-catalog-"));
   try {
     if (item.kind === "tool") {
