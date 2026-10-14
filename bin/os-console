@@ -1,0 +1,11 @@
+#!/bin/sh
+# Launch the Sandbox Console from anywhere. Symlink this file onto your PATH
+# (e.g. ~/.local/bin/os-console); it resolves the link to find the repo.
+set -eu
+src=$0
+while [ -L "$src" ]; do
+  dir=$(cd "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+exec "$(cd "$(dirname "$src")/.." && pwd)/console.sh" "$@"
